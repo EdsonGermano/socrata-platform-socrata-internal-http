@@ -21,16 +21,16 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
   private[this] var sawEncoderEOF = false
   private[this] var sawFlushEOF = false
 
+  private def trace(s: Any*) = {} // println(s.mkString)
   private def trace(s: String) = {} // println(s)
 
   // returns true if targetByteBuffer could take more
   private def fill(targetByteBuffer: ByteBuffer): Boolean = {
     byteBufferReading()
     if(byteBuffer.hasRemaining) {
-      val slice = byteBuffer.slice
       val toCopy = Math.min(targetByteBuffer.remaining, byteBuffer.remaining)
-      slice.limit(toCopy)
-      targetByteBuffer.put(slice)
+      // No way to bulk copy a subset of a bytebuffer without making a temporary slice object?
+      targetByteBuffer.put(byteBuffer.array, byteBuffer.position + byteBuffer.arrayOffset, toCopy)
       byteBuffer.position(byteBuffer.position + toCopy)
     }
     targetByteBuffer.hasRemaining
@@ -104,7 +104,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
       charBufferWriting()
 
       val preexisting = charBuffer.position
-      trace("Reading into the char buffer after the first " + preexisting + " char(s)")
+      trace("Reading into the char buffer after the first ", preexisting, " char(s)")
       val count = reader.read(charBuffer.array, preexisting + charBuffer.arrayOffset, charBuffer.capacity - preexisting)
       if(count == -1) {
         trace("I have now seen the reader EOF")
@@ -115,7 +115,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
           }
         }
       } else {
-        trace("Read " + count + " char(s)")
+        trace("Read ", count, " char(s)")
         totalCharsRead += count
         charBuffer.position(preexisting + count)
       }
@@ -143,12 +143,12 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
     }
 
     if(doRead) {
-      trace("Encoding from the char buffer; there are " + charBuffer.remaining + " char(s) that must fit in " + byteBuffer.remaining + " byte(s)")
+      trace("Encoding from the char buffer; there are ", charBuffer.remaining, " char(s) that must fit in ", byteBuffer.remaining, " byte(s)")
       encode() match {
         case CoderResult.UNDERFLOW =>
-          trace("Underflow when encoding; there are " + charBuffer.remaining + " char(s) remaining in the source and " + byteBuffer.remaining + " byte(s) remaining in the target")
+          trace("Underflow when encoding; there are ", charBuffer.remaining, " char(s) remaining in the source and ", byteBuffer.remaining, " byte(s) remaining in the target")
         case CoderResult.OVERFLOW =>
-          trace("Overflow when encoding; there are "  + charBuffer.remaining + " char(s) remaining in the source and " + byteBuffer.remaining + " byte(s) remaining in the target")
+          trace("Overflow when encoding; there are ", charBuffer.remaining, " char(s) remaining in the source and ", byteBuffer.remaining, " byte(s) remaining in the target")
       }
     }
 
@@ -166,9 +166,9 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
   }
 
   private def fillFromTmpByteBuffer(bb: ByteBuffer) = {
-    val start = bb.remaining
+    val length = bb.remaining
     fill(bb)
-    start - bb.remaining
+    length - bb.remaining
   }
 
   private def finishRead(bb: ByteBuffer, readSoFar: Int): Int = {
@@ -179,7 +179,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
       else readSoFar
     } else {
       val result = length - bb.remaining
-      trace("Read " + result + " bytes")
+      trace("Read ", result, " bytes")
       readSoFar + result
     }
   }
