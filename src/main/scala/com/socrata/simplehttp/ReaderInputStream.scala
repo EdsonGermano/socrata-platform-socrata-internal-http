@@ -66,7 +66,9 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
 
   @tailrec
   private def readAsMuchAsPossible(targetByteBuffer: ByteBuffer) {
-    var noRead = false
+    if(!fill(targetByteBuffer)) return
+
+    var doRead = true
 
     def doFlushEOF() {
       assert(!charBuffer.hasRemaining)
@@ -118,12 +120,10 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
         charBuffer.position(preexisting + count)
       }
     } else if(!sawEncoderEOF) {
-      if(doEncoderEOF()) {
-        noRead = true
-      }
+      if(doEncoderEOF()) doRead = false
     } else if(!sawFlushEOF) {
       doFlushEOF()
-      noRead = true
+      doRead = false
     } else {
       trace("I have already seen all three EOFs")
       fill(targetByteBuffer)
@@ -142,9 +142,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
       res
     }
 
-    if(!targetByteBuffer.hasRemaining) return
-
-    if(!noRead) {
+    if(doRead) {
       trace("Encoding from the char buffer; there are " + charBuffer.remaining + " char(s) that must fit in " + byteBuffer.remaining + " byte(s)")
       encode() match {
         case CoderResult.UNDERFLOW =>
@@ -153,7 +151,8 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
           trace("Overflow when encoding; there are "  + charBuffer.remaining + " char(s) remaining in the source and " + byteBuffer.remaining + " byte(s) remaining in the target")
       }
     }
-    if(fill(targetByteBuffer)) readAsMuchAsPossible(targetByteBuffer)
+
+    readAsMuchAsPossible(targetByteBuffer)
   }
 
   override def read(bytes: Array[Byte], offset: Int, length: Int): Int = {
@@ -186,8 +185,13 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
   }
 
   def read() = {
-    val b = new Array[Byte](1)
-    if(read(b) == -1) -1
-    else b(0)
+    byteBufferReading()
+    if(byteBuffer.hasRemaining) {
+      byteBuffer.get() & 0xff
+    } else {
+      val b = new Array[Byte](1)
+      if(read(b) == -1) -1
+      else b(0)
+    }
   }
 }
