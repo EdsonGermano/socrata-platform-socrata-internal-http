@@ -160,27 +160,14 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024)
 
     val bb = ByteBuffer.wrap(bytes, offset, length)
 
-    val copied = fillFromTmpByteBuffer(bb)
-    if(bb.hasRemaining) finishRead(bb, copied)
-    else copied
-  }
-
-  private def fillFromTmpByteBuffer(bb: ByteBuffer) = {
-    val length = bb.remaining
-    fill(bb)
-    length - bb.remaining
-  }
-
-  private def finishRead(bb: ByteBuffer, readSoFar: Int): Int = {
-    val length = bb.remaining
+    val remainingAtStart = bb.remaining
     readAsMuchAsPossible(bb)
-    if(bb.remaining == length) {
-      if(readSoFar == 0) -1
-      else readSoFar
+    if(bb.remaining == remainingAtStart) {
+      -1
     } else {
-      val result = length - bb.remaining
+      val result = remainingAtStart - bb.remaining
       trace("Read ", result, " bytes")
-      readSoFar + result
+      result
     }
   }
 
