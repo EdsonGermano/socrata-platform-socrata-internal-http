@@ -12,8 +12,9 @@ class JsonEventIteratorReader(events: Iterator[JsonEvent]) extends Reader {
     assert(remainingToken != null)
 
     val toCopy = Math.min(length, remainingToken.length - remainingTokenOffset)
-    remainingToken.getChars(remainingTokenOffset, remainingTokenOffset + toCopy, buf, offset)
-    if(remainingToken.length == remainingTokenOffset + toCopy) {
+    val tokenEnd = remainingTokenOffset + toCopy
+    remainingToken.getChars(remainingTokenOffset, tokenEnd, buf, offset)
+    if(remainingToken.length == tokenEnd) {
       if(tokens.hasNext) {
         remainingToken = tokens.next().asFragment
         remainingTokenOffset = 0
@@ -21,7 +22,7 @@ class JsonEventIteratorReader(events: Iterator[JsonEvent]) extends Reader {
         remainingToken = null
       }
     } else {
-      remainingTokenOffset += toCopy
+      remainingTokenOffset = tokenEnd
     }
 
     toCopy

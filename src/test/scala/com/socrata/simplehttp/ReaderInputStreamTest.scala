@@ -124,7 +124,10 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts wit
 
         val cs = allCharsets(range(0, allCharsets.length - 1))
         val bs = new ByteArrayOutputStream
-        val ris = new ReaderInputStream(new ShortReader(new StringReader(s)), cs, range(1, 65535))
+        def maybeShortReader(r: Reader) =
+          if(rng.nextBoolean()) r
+          else new ShortReader(r)
+        val ris = new ReaderInputStream(maybeShortReader(new StringReader(s)), cs, range(1, 65535))
 
         failAfter(10000 millis) {
           copyTo(ris, bs, range(512, 4096))
