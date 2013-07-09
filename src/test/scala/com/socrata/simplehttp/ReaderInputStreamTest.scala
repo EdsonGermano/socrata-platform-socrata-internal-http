@@ -7,8 +7,10 @@ import java.io._
 import org.scalatest.matchers.MustMatchers
 import org.scalatest.exceptions.ModifiableMessage
 import java.nio.charset.Charset
+import org.scalatest.concurrent.Timeouts
+import org.scalatest.time.SpanSugar
 
-class ReaderInputStreamTest extends FunSuite with MustMatchers {
+class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts with SpanSugar {
   def range(min: Int, max: Int)(implicit rng: Random): Int =
     min + rng.nextInt(1 + max - min)
 
@@ -123,7 +125,10 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers {
         val cs = allCharsets(range(0, allCharsets.length - 1))
         val bs = new ByteArrayOutputStream
         val ris = new ReaderInputStream(new ShortReader(new StringReader(s)), cs, range(1, 65535))
-        copyTo(ris, bs)
+
+        failAfter(10000 millis) {
+          copyTo(ris, bs)
+        }
 
         val fromReader = bs.toByteArray
         val fromString = s.getBytes(cs)
