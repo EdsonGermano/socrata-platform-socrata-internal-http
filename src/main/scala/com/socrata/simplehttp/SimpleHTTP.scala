@@ -12,6 +12,8 @@ import com.rojoma.json.codec.JsonCodec
 import java.util.zip.GZIPInputStream
 import org.apache.http.{HttpEntity, HttpResponse}
 import javax.activation.{MimeTypeParseException, MimeType}
+import java.lang.reflect.UndeclaredThrowableException
+import com.rojoma.simplearm
 
 trait ResponseInfo {
   def resultCode: Int
@@ -64,10 +66,10 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
   }
 
   def noContentTypeInResponse() = ???
-  def unparsableContentType() = ???
-  def responseNotJson() = ???
-  def illegalCharsetName() = ???
-  def unsupportedCharset() = ???
+  def unparsableContentType(contentType: String) = ???
+  def responseNotJson(mimeType: String) = ???
+  def illegalCharsetName(charsetName: String) = ???
+  def unsupportedCharset(charsetName: String) = ???
 
   private def responsify(response: HttpResponse): Iterator[JsonEvent] with ResponseInfoProvider = {
     val entity = response.getEntity
@@ -76,15 +78,15 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
 
     val charset = try {
       val mimeType = new MimeType(contentType.getValue)
-      if(mimeType.getBaseType != jsonContentTypeBase) responseNotJson()
+      if(mimeType.getBaseType != jsonContentTypeBase) responseNotJson(mimeType.getBaseType)
       Option(mimeType.getParameter("charset")).map(Charset.forName).getOrElse(StandardCharsets.ISO_8859_1)
     } catch {
       case _: MimeTypeParseException =>
-        unparsableContentType()
-      case _: IllegalCharsetNameException =>
-        illegalCharsetName()
-      case _: UnsupportedCharsetException =>
-        unsupportedCharset()
+        unparsableContentType(contentType.getValue)
+      case e: IllegalCharsetNameException =>
+        illegalCharsetName(e.getCharsetName)
+      case e: UnsupportedCharsetException =>
+        unsupportedCharset(e.getCharsetName)
     }
 
     val reader = new InputStreamReader(entity.getContent, charset)
@@ -94,15 +96,27 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
     }
   }
 
+  private implicit def httpUriRequestResource[A <: HttpRequestBase] = new simplearm.Resource[A] {
+    def close(a: A) {
+      a.reset()
+    }
+  }
+
+  private def send[A](req: HttpUriRequest, f: Response => A) = {
+    val response = try {
+      httpclient.execute(req)
+    } catch {
+      case e: UndeclaredThrowableException =>
+        throw e.getCause
+    }
+    f(responsify(response))
+  }
+
   def get(url: SimpleURL): Managed[Response] = new SimpleArm[Response] {
     def flatMap[A](f: Response => A): A = {
       init()
-      val get = new HttpGet(url.toString)
-      try {
-        val response = httpclient.execute(get)
-        f(responsify(response))
-      } finally {
-        get.reset()
+      using(new HttpGet(url.toString)) { get =>
+        send(get, f)
       }
     }
   }
@@ -110,58 +124,33 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
   def delete(url: SimpleURL): Managed[Response] = new SimpleArm[Response] {
     def flatMap[A](f: Response => A): A = {
       init()
-      val delete = new HttpDelete(url.toString)
-      try {
-        val response = httpclient.execute(delete)
-        f(responsify(response))
-      } finally {
-        delete.reset()
+      using(new HttpDelete(url.toString)) { delete =>
+        send(delete, f)
       }
     }
   }
 
   def post[T: JsonCodec](url: SimpleURL, body: T): Managed[Response] =
-    codecBody(url, body, new HttpPost(_))
+    post(url, JValueEventIterator(JsonCodec[T].encode(body)))
 
   def post(url: SimpleURL, body: Iterator[JsonEvent]): Managed[Response] =
     streamBody(url, body, new HttpPost(_))
 
   def put[T: JsonCodec](url: SimpleURL, body: T): Managed[Response] =
-    codecBody(url, body, new HttpPut(_))
+    put(url, JValueEventIterator(JsonCodec[T].encode(body)))
 
   def put(url: SimpleURL, body: Iterator[JsonEvent]): Managed[Response] =
     streamBody(url, body, new HttpPut(_))
 
-  private def codecBody[T : JsonCodec](url: SimpleURL, body: T, method: String => HttpEntityEnclosingRequestBase): Managed[Response] = new SimpleArm[Response] {
-    def flatMap[A](f: Response => A): A = {
-      init()
-      val post = method(url.toString)
-      try {
-        val sendEntity = new StringEntity(CompactJsonWriter.toString(JsonCodec[T].encode(body)), jsonContentType)
-        withBody(url, sendEntity, method, f)
-      } finally {
-        post.reset()
-      }
-    }
-  }
-
   private def streamBody(url: SimpleURL, body: Iterator[JsonEvent], method: String => HttpEntityEnclosingRequestBase): Managed[Response] = new SimpleArm[Response] {
     def flatMap[A](f: Response => A): A = {
+      init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(body), StandardCharsets.UTF_8), -1, jsonContentType)
       sendEntity.setChunked(true)
-      withBody(url, sendEntity, method, f)
-    }
-  }
-
-  private def withBody[A](url: SimpleURL, sendEntity: HttpEntity, method: String => HttpEntityEnclosingRequestBase, f: Response => A): A = {
-    init()
-    val post = method(url.toString)
-    try {
-      post.setEntity(sendEntity)
-      val response = httpclient.execute(post)
-      f(responsify(response))
-    } finally {
-      post.reset()
+      using(method(url.toString)) { op =>
+        op.setEntity(sendEntity)
+        send(op, f)
+      }
     }
   }
 }
