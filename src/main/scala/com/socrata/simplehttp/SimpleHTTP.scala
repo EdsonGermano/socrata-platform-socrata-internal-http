@@ -36,14 +36,15 @@ trait HttpClient extends Closeable {
   type RawResponse = InputStream with ResponseInfoProvider
 
   protected def noContentTypeInResponse() = ???
+  protected def multipleContentTypesInResponse() = ???
   protected def unparsableContentType(contentType: String) = ???
   protected def responseNotJson(mimeType: String) = ???
   protected def illegalCharsetName(charsetName: String) = ???
   protected def unsupportedCharset(charsetName: String) = ???
   protected def noBodyInResponse() = ???
 
-  protected def charsetFor(responseInfo: ResponseInfo): Charset = responseInfo.headers("content-type").headOption match {
-    case Some(ct) =>
+  protected def charsetFor(responseInfo: ResponseInfo): Charset = responseInfo.headers("content-type") match {
+    case Array(ct) =>
       try {
         val mimeType = new MimeType(ct)
         if(mimeType.getBaseType != jsonContentTypeBase) responseNotJson(mimeType.getBaseType)
@@ -56,8 +57,10 @@ trait HttpClient extends Closeable {
         case e: UnsupportedCharsetException =>
           unsupportedCharset(e.getCharsetName)
       }
-    case None =>
+    case Array() =>
       noContentTypeInResponse()
+    case _ =>
+      multipleContentTypesInResponse()
   }
 
   private def jsonify(response: Managed[RawResponse]): Managed[Response] = new SimpleArm[Response] {
@@ -66,7 +69,7 @@ trait HttpClient extends Closeable {
         val reader = new InputStreamReader(raw, charsetFor(raw.responseInfo))
         val processed: Iterator[JsonEvent] with ResponseInfoProvider =
           new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider {
-            def responseInfo = raw.responseInfo
+            val responseInfo = raw.responseInfo
           }
         f(processed)
       }
