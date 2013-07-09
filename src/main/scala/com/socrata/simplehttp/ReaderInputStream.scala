@@ -12,7 +12,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSizeHint: Int = 1
 
   private[this] val charBuffer = CharBuffer.allocate(blockSize)
   private[this] var isCharBufferReading = false
-  private[this] val byteBuffer = ByteBuffer.allocate((blockSize * encoder.maxBytesPerChar.toDouble).toInt) // I hate you java I hate you forever
+  private[this] val byteBuffer = ByteBuffer.allocate(Math.ceil(blockSize * encoder.averageBytesPerChar.toDouble).toInt) // I hate you java I hate you forever
   private[this] var isByteBufferReading = false
 
   private[this] var totalCharsRead = 0L

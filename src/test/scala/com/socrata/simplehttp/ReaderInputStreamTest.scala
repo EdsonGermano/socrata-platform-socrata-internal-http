@@ -6,7 +6,7 @@ import scala.util.Random
 import java.io._
 import org.scalatest.matchers.MustMatchers
 import org.scalatest.exceptions.ModifiableMessage
-import java.nio.charset.Charset
+import java.nio.charset.{StandardCharsets, Charset}
 import org.scalatest.concurrent.Timeouts
 import org.scalatest.time.SpanSugar
 
@@ -127,9 +127,9 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts wit
         def maybeShortReader(r: Reader) =
           if(rng.nextBoolean()) r
           else new ShortReader(r)
-        val ris = new ReaderInputStream(maybeShortReader(new StringReader(s)), cs, range(1, 65535))
+        val ris = new ReaderInputStream(maybeShortReader(new StringReader(s)), cs, range(1, 10000))
 
-        failAfter(10000 millis) {
+        failAfter(10 seconds) {
           copyTo(ris, bs, range(512, 4096))
         }
 
@@ -140,6 +140,36 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts wit
       } catch {
         case e: Throwable if !e.isInstanceOf[ModifiableMessage[_]] =>
           fail(e)
+      }
+    }
+  }
+
+  test("Worst-case UTF-8 string") {
+    val seedProvider = new Random
+    for(i <- 1 to 100) {
+      val seed = seedProvider.nextLong()
+
+      withClue(seed) {
+        try {
+          implicit val rng = new Random(seed)
+
+          val s = s"${Character.MAX_HIGH_SURROGATE}${Character.MAX_LOW_SURROGATE}" * range(1, 10000)
+
+          val bs = new ByteArrayOutputStream
+          val ris = new ReaderInputStream(new StringReader(s), StandardCharsets.UTF_8, range(1, 10000))
+
+          failAfter(1 second) {
+            copyTo(ris, bs, range(512, 4096))
+          }
+
+          val fromReader = bs.toByteArray
+          val fromString = s.getBytes(StandardCharsets.UTF_8)
+
+          fromReader must equal (fromString)
+        } catch {
+          case e: Throwable if !e.isInstanceOf[ModifiableMessage[_]] =>
+            fail(e)
+        }
       }
     }
   }
