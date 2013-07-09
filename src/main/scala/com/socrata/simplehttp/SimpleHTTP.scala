@@ -21,6 +21,7 @@ import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConne
 
 trait ResponseInfo {
   def resultCode: Int
+  def headers(name: String): Array[String] // this will return an empty array if the header does not exist
 }
 
 trait ResponseInfoProvider {
@@ -136,6 +137,10 @@ class HttpClientHttpClient(val connectionTimeout: Int,
         val responseJsonStream: Iterator[JsonEvent] with ResponseInfoProvider = new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider with ResponseInfo {
           def responseInfo = this
           val resultCode = response.getStatusLine.getStatusCode
+
+          // I am *fairly* sure (from code-diving) that the value field of a header
+          // parsed from a response will never be null.
+          def headers(name: String) = response.getHeaders(name).map(_.getValue)
         }
         f(responseJsonStream)
       } catch {
@@ -221,18 +226,18 @@ class HttpClientHttpClient(val connectionTimeout: Int,
 
 object Blah extends App {
   for {
-    cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000))
-    /*
-    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
+    cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000, continueTimeout = None))
+    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.final.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
     resp <- cli.post(SimpleURL.http("localhost", port = 10000), new FusedBlockJsonEventIterator(reader))
-    */
+    /*
     compressed <- managed(new FileInputStream("/home/robertm/tiny.gz"))
     resp <- cli.postFile(SimpleURL.http("localhost", port = 10000), managed(new GZIPInputStream(compressed)))
+    */
   } {
     println(resp.responseInfo.resultCode)
-    println(JsonReader.fromEvents(resp))
-    throw new Exception("hello world")
+    EventTokenIterator(resp).map(_.asFragment).foreach(print)
+    println()
   }
 }
