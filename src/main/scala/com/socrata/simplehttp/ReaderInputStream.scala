@@ -31,6 +31,9 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSizeHint: Int = 1
       // No way to bulk copy a subset of a bytebuffer without making a temporary slice object?
       targetByteBuffer.put(byteBuffer.array, byteBuffer.position + byteBuffer.arrayOffset, toCopy)
       byteBuffer.position(byteBuffer.position + toCopy)
+      if(!byteBuffer.hasRemaining) byteBufferClear()
+    } else {
+      byteBufferClear()
     }
     targetByteBuffer.hasRemaining
   }
@@ -54,6 +57,11 @@ class ReaderInputStream(reader: Reader, charset: Charset, blockSizeHint: Int = 1
       byteBuffer.flip()
       isByteBufferReading = true
     }
+  }
+
+  private def byteBufferClear() {
+    byteBuffer.clear()
+    isByteBufferReading = false
   }
 
   private def byteBufferWriting() {
