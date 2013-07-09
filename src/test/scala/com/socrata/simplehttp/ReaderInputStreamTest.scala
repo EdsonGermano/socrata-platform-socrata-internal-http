@@ -70,8 +70,8 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts wit
     def close() { r.close() }
   }
 
-  private def copyTo(from: InputStream, to: OutputStream) {
-    val buf = new Array[Byte](1024)
+  private def copyTo(from: InputStream, to: OutputStream, blockSize: Int) {
+    val buf = new Array[Byte](blockSize)
     def loop() {
       from.read(buf) match {
         case -1 => // done
@@ -105,13 +105,13 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts wit
 
   private def doValidTest(seed: Long) {
     doTest(seed) { implicit rng =>
-      generateValidString(0, 10000, 0.25)
+      generateValidString(0, 10000, rng.nextDouble())
     }
   }
 
   private def doInvalidTest(seed: Long) {
     doTest(seed) { implicit rng =>
-      generateInvalidString(0, 10000, 0.25, 0.25, 0.25)
+      generateInvalidString(0, 10000, rng.nextDouble() / 3, rng.nextDouble() / 3, rng.nextDouble() / 3)
     }
   }
 
@@ -127,7 +127,7 @@ class ReaderInputStreamTest extends FunSuite with MustMatchers with Timeouts wit
         val ris = new ReaderInputStream(new ShortReader(new StringReader(s)), cs, range(1, 65535))
 
         failAfter(10000 millis) {
-          copyTo(ris, bs)
+          copyTo(ris, bs, range(512, 4096))
         }
 
         val fromReader = bs.toByteArray
