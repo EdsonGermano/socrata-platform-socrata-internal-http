@@ -1,12 +1,11 @@
 package com.socrata.simplehttp
 
-import scala.annotation.tailrec
 import java.io._
 import java.nio.charset.{CodingErrorAction, Charset, CoderResult}
 import java.nio.{ByteBuffer,CharBuffer}
 
-class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1024) extends InputStream {
-  require(blockSize > 0, "Non-positive block size")
+class ReaderInputStream(reader: Reader, charset: Charset, blockSizeHint: Int = 1024) extends InputStream {
+  val blockSize = Math.max(16, blockSizeHint)
 
   def this(reader: Reader, charset: String) = this(reader, Charset.forName(charset))
   private[this] val encoder = charset.newEncoder().onMalformedInput(CodingErrorAction.REPLACE).onUnmappableCharacter(CodingErrorAction.REPLACE).reset()
@@ -17,9 +16,10 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
   private[this] var isByteBufferReading = false
 
   private[this] var totalCharsRead = 0L
-  private[this] var sawReaderEOF = false
-  private[this] var sawEncoderEOF = false
-  private[this] var sawFlushEOF = false
+
+  // 1st EOF is from the reader; 2nd is from the encoder's encode method; 3rd is from the encoder's flush method.
+  private[this] var EOFsSeen = 0
+  private def seenReaderEOF = EOFsSeen > 0
 
   private def trace(s: Any*) = {} // println(s.mkString)
   private def trace(s: String) = {} // println(s)
@@ -64,12 +64,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
     }
   }
 
-  @tailrec
   private def readAsMuchAsPossible(targetByteBuffer: ByteBuffer) {
-    if(!fill(targetByteBuffer)) return
-
-    var doRead = true
-
     def doFlushEOF() {
       assert(!charBuffer.hasRemaining)
 
@@ -77,9 +72,9 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
       encoder.flush(byteBuffer) match {
         case CoderResult.UNDERFLOW =>
           trace("I have now seen the flush EOF")
-          sawFlushEOF = true
+          EOFsSeen = 3
         case CoderResult.OVERFLOW =>
-          // pass
+        // pass
       }
       fill(targetByteBuffer)
     }
@@ -91,7 +86,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
         case CoderResult.UNDERFLOW =>
           assert(!charBuffer.hasRemaining)
           trace("I have now seen the encoder EOF")
-          sawEncoderEOF = true
+          EOFsSeen = 2
           doFlushEOF()
           true
         case CoderResult.OVERFLOW =>
@@ -100,7 +95,31 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
       }
     }
 
-    if(!sawReaderEOF) {
+    def encode() = {
+      charBufferReading()
+      byteBufferWriting()
+      trace("Encoding from the char buffer; there are ", charBuffer.remaining, " char(s) that must fit in ", byteBuffer.remaining, " byte(s)")
+      val res = encoder.encode(charBuffer, byteBuffer, seenReaderEOF)
+
+      /*
+      res match {
+        case CoderResult.UNDERFLOW =>
+          trace("Underflow when encoding; there are ", charBuffer.remaining, " char(s) remaining in the source and ", byteBuffer.remaining, " free byte(s) remaining in the target")
+        case CoderResult.OVERFLOW =>
+          trace("Overflow when encoding; there are ", charBuffer.remaining, " char(s) remaining in the source and ", byteBuffer.remaining, " free byte(s) remaining in the target")
+      }
+      */
+
+      if(res == CoderResult.UNDERFLOW && seenReaderEOF) {
+        assert(!charBuffer.hasRemaining)
+        trace("I have now seen the encoder EOF")
+        EOFsSeen = 2
+      }
+
+      res
+    }
+
+    def normalRead() {
       charBufferWriting()
 
       val preexisting = charBuffer.position
@@ -108,51 +127,30 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
       val count = reader.read(charBuffer.array, preexisting + charBuffer.arrayOffset, charBuffer.capacity - preexisting)
       if(count == -1) {
         trace("I have now seen the reader EOF")
-        sawReaderEOF = true
-        if(preexisting == 0) {
-          if(doEncoderEOF()) {
-            return
-          }
-        }
+        EOFsSeen = 1
+        if(preexisting != 0 || !doEncoderEOF()) encode()
       } else {
         trace("Read ", count, " char(s)")
         totalCharsRead += count
         charBuffer.position(preexisting + count)
-      }
-    } else if(!sawEncoderEOF) {
-      if(doEncoderEOF()) doRead = false
-    } else if(!sawFlushEOF) {
-      doFlushEOF()
-      doRead = false
-    } else {
-      trace("I have already seen all three EOFs")
-      fill(targetByteBuffer)
-      return
-    }
-
-    def encode() = {
-      charBufferReading()
-      byteBufferWriting()
-      val res = encoder.encode(charBuffer, byteBuffer, sawReaderEOF)
-      if(res == CoderResult.UNDERFLOW && sawReaderEOF) {
-        assert(!charBuffer.hasRemaining)
-        trace("I have now seen the encoder EOF")
-        sawEncoderEOF = true
-      }
-      res
-    }
-
-    if(doRead) {
-      trace("Encoding from the char buffer; there are ", charBuffer.remaining, " char(s) that must fit in ", byteBuffer.remaining, " byte(s)")
-      encode() match {
-        case CoderResult.UNDERFLOW =>
-          trace("Underflow when encoding; there are ", charBuffer.remaining, " char(s) remaining in the source and ", byteBuffer.remaining, " byte(s) remaining in the target")
-        case CoderResult.OVERFLOW =>
-          trace("Overflow when encoding; there are ", charBuffer.remaining, " char(s) remaining in the source and ", byteBuffer.remaining, " byte(s) remaining in the target")
+        encode()
       }
     }
 
-    readAsMuchAsPossible(targetByteBuffer)
+    while(fill(targetByteBuffer)) {
+      EOFsSeen match {
+        case 0 =>
+          normalRead()
+        case 1 =>
+          if(!doEncoderEOF()) encode()
+        case 2 =>
+          doFlushEOF()
+        case 3 =>
+          trace("I have already seen all three EOFs")
+          fill(targetByteBuffer)
+          return
+      }
+    }
   }
 
   override def read(bytes: Array[Byte], offset: Int, length: Int): Int = {
