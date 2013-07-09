@@ -103,12 +103,11 @@ class HttpClientHttpClient(val connectionTimeout: Int,
   def unsupportedCharset(charsetName: String) = ???
   def noBodyInResponse() = ???
 
-  private def responsify(response: HttpResponse): Iterator[JsonEvent] with ResponseInfoProvider = {
-    val entity = response.getEntity
+  private def charsetFor(entity: HttpEntity): Charset = {
     val contentType = entity.getContentType
     if(contentType == null) noContentTypeInResponse()
 
-    val charset = try {
+    try {
       val mimeType = new MimeType(contentType.getValue)
       if(mimeType.getBaseType != jsonContentTypeBase) responseNotJson(mimeType.getBaseType)
       Option(mimeType.getParameter("charset")).map(Charset.forName).getOrElse(StandardCharsets.ISO_8859_1)
@@ -120,12 +119,6 @@ class HttpClientHttpClient(val connectionTimeout: Int,
       case e: UnsupportedCharsetException =>
         unsupportedCharset(e.getCharsetName)
     }
-
-    val reader = new InputStreamReader(entity.getContent, charset)
-    new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider with ResponseInfo {
-      def responseInfo = this
-      val resultCode = response.getStatusLine.getStatusCode
-    }
   }
 
   private def send[A](req: HttpUriRequest, f: Response => A) = {
@@ -135,10 +128,16 @@ class HttpClientHttpClient(val connectionTimeout: Int,
       case e: UndeclaredThrowableException =>
         throw e.getCause
     }
-    if(response.getEntity != null) {
-      val content = response.getEntity.getContent
+    val entity = response.getEntity
+    if(entity != null) {
+      val content = entity.getContent
       try {
-        f(responsify(response))
+        val reader = new InputStreamReader(content, charsetFor(entity))
+        val responseJsonStream: Iterator[JsonEvent] with ResponseInfoProvider = new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider with ResponseInfo {
+          def responseInfo = this
+          val resultCode = response.getStatusLine.getStatusCode
+        }
+        f(responseJsonStream)
       } catch {
         case e: Exception =>
           req.abort()
