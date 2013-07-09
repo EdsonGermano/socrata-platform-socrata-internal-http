@@ -5,7 +5,7 @@ import java.io._
 import java.nio.charset.{CodingErrorAction, Charset, CoderResult}
 import java.nio.{ByteBuffer,CharBuffer}
 
-class ReaderInputStream(reader: Reader, charset: Charset, blockSize: Int = 1024) extends InputStream {
+class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1024) extends InputStream {
   require(blockSize > 0, "Non-positive block size")
 
   def this(reader: Reader, charset: String) = this(reader, Charset.forName(charset))
