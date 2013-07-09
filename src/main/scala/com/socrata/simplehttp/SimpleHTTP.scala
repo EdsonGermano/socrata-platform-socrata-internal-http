@@ -16,6 +16,8 @@ import java.lang.reflect.UndeclaredThrowableException
 import com.rojoma.simplearm
 import org.apache.http.entity.mime.{FormBodyPart, MultipartEntity}
 import org.apache.http.entity.mime.content.InputStreamBody
+import org.apache.http.impl.conn.PoolingClientConnectionManager
+import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
 
 trait ResponseInfo {
   def resultCode: Int
@@ -53,10 +55,20 @@ object HttpClient {
   val octetStreamContentType = ContentType.create(octetStreamContentTypeBase)
 }
 
-class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, continueTimeout: Option[Int] = Some(3000)) extends HttpClient {
+class HttpClientHttpClient(val connectionTimeout: Int,
+                           val dataTimeout: Int,
+                           continueTimeout: Option[Int] = Some(3000),
+                           userAgent: String = "HttpClientHttpClient")
+  extends HttpClient
+{
   import HttpClient._
 
-  private[this] val httpclient = new DefaultHttpClient
+  private[this] val httpclient = locally {
+    val connManager = new PoolingClientConnectionManager
+    connManager.setDefaultMaxPerRoute(Int.MaxValue)
+    connManager.setMaxTotal(Int.MaxValue)
+    new DefaultHttpClient(connManager)
+  }
   @volatile private[this] var initialized = false
 
   private def init() {
@@ -64,14 +76,15 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
       synchronized {
         if(!initialized) {
           val params = httpclient.getParams
-          params.setParameter("http.connection.timeout", connectionTimeout)
-          params.setParameter("http.socket.timeout", dataTimeout)
+          HttpConnectionParams.setConnectionTimeout(params, connectionTimeout)
+          HttpConnectionParams.setSoTimeout(params, dataTimeout)
+          HttpProtocolParams.setUserAgent(params, userAgent)
           continueTimeout match {
             case Some(timeout) =>
-              params.setParameter("http.protocol.expect-continue", true)
-              params.setParameter("http.protocol.wait-for-continue", timeout)
+              HttpProtocolParams.setUseExpectContinue(params, true)
+              params.setIntParameter(CoreProtocolPNames.WAIT_FOR_CONTINUE, timeout) // no option for this one?
             case None =>
-              params.setParameter("http.protocol.expect-continue", false)
+              HttpProtocolParams.setUseExpectContinue(params, false)
           }
           initialized = true
         }
@@ -88,6 +101,7 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
   def responseNotJson(mimeType: String) = ???
   def illegalCharsetName(charsetName: String) = ???
   def unsupportedCharset(charsetName: String) = ???
+  def noBodyInResponse() = ???
 
   private def responsify(response: HttpResponse): Iterator[JsonEvent] with ResponseInfoProvider = {
     val entity = response.getEntity
@@ -114,12 +128,6 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
     }
   }
 
-  private implicit def httpUriRequestResource[A <: HttpRequestBase] = new simplearm.Resource[A] {
-    def close(a: A) {
-      a.reset()
-    }
-  }
-
   private def send[A](req: HttpUriRequest, f: Response => A) = {
     val response = try {
       httpclient.execute(req)
@@ -127,24 +135,33 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
       case e: UndeclaredThrowableException =>
         throw e.getCause
     }
-    f(responsify(response))
+    if(response.getEntity != null) {
+      val content = response.getEntity.getContent
+      try {
+        f(responsify(response))
+      } catch {
+        case e: Exception =>
+          req.abort()
+          throw e
+      } finally {
+        content.close()
+      }
+    } else {
+      noBodyInResponse()
+    }
   }
 
   def get(url: SimpleURL): Managed[Response] = new SimpleArm[Response] {
     def flatMap[A](f: Response => A): A = {
       init()
-      using(new HttpGet(url.toString)) { get =>
-        send(get, f)
-      }
+      send(new HttpGet(url.toString), f)
     }
   }
 
   def delete(url: SimpleURL): Managed[Response] = new SimpleArm[Response] {
     def flatMap[A](f: Response => A): A = {
       init()
-      using(new HttpDelete(url.toString)) { delete =>
-        send(delete, f)
-      }
+      send(new HttpDelete(url.toString), f)
     }
   }
 
@@ -159,10 +176,9 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new FormReader(formContents), StandardCharsets.UTF_8), -1, formContentType)
       sendEntity.setChunked(true)
-      using(new HttpPost(url.toString)) { post =>
-        post.setEntity(sendEntity)
-        send(post, f)
-      }
+      val post = new HttpPost(url.toString)
+      post.setEntity(sendEntity)
+      send(post, f)
     }
   }
 
@@ -183,10 +199,9 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(body), StandardCharsets.UTF_8), -1, jsonContentType)
       sendEntity.setChunked(true)
-      using(method(url.toString)) { op =>
-        op.setEntity(sendEntity)
-        send(op, f)
-      }
+      val op = method(url.toString)
+      op.setEntity(sendEntity)
+      send(op, f)
     }
   }
 
@@ -194,12 +209,10 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
     new SimpleArm[Response] {
       def flatMap[A](f: Response => A): A = {
         init()
-        val sendEntity = new MultipartEntity
-        for {
-          inputStream <- input
-          op <- managed(method(url.toString))
-        } yield {
+        for(inputStream <- input) yield {
+          val sendEntity = new MultipartEntity
           sendEntity.addPart(field, new InputStreamBody(inputStream, contentType, file))
+          val op = method(url.toString)
           op.setEntity(sendEntity)
           send(op, f)
         }
@@ -209,16 +222,18 @@ class HttpClientHttpClient(val connectionTimeout: Int, val dataTimeout: Int, con
 
 object Blah extends App {
   for {
-    cli <- managed(new HttpClientHttpClient(100000, 100000))
-    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
+    cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000))
     /*
+    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
     resp <- cli.post(SimpleURL.http("localhost", port = 10000), new FusedBlockJsonEventIterator(reader))
     */
+    compressed <- managed(new FileInputStream("/home/robertm/tiny.gz"))
     resp <- cli.postFile(SimpleURL.http("localhost", port = 10000), managed(new GZIPInputStream(compressed)))
   } {
     println(resp.responseInfo.resultCode)
     println(JsonReader.fromEvents(resp))
+    throw new Exception("hello world")
   }
 }
