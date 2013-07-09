@@ -178,7 +178,7 @@ class ReaderInputStream(reader: Reader, charset: Charset, val blockSize: Int = 1
     } else {
       val b = new Array[Byte](1)
       if(read(b) == -1) -1
-      else b(0)
+      else b(0) & 0xff
     }
   }
 }
