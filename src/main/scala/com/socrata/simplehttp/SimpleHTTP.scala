@@ -1,6 +1,6 @@
 package com.socrata.simplehttp
 
-import java.io.{InputStream, FileInputStream, Closeable, InputStreamReader}
+import java.io._
 import java.nio.charset.{UnsupportedCharsetException, IllegalCharsetNameException, Charset, StandardCharsets}
 import org.apache.http.impl.client.DefaultHttpClient
 import org.apache.http.client.methods._
@@ -18,6 +18,7 @@ import org.apache.http.entity.mime.{FormBodyPart, MultipartEntity}
 import org.apache.http.entity.mime.content.InputStreamBody
 import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
+import scala.Some
 
 trait ResponseInfo {
   def resultCode: Int
@@ -32,19 +33,69 @@ trait HttpClient extends Closeable {
   import HttpClient._
 
   type Response = Iterator[JsonEvent] with ResponseInfoProvider
+  type RawResponse = InputStream with ResponseInfoProvider
 
-  def get(url: SimpleURL): Managed[Response]
+  protected def noContentTypeInResponse() = ???
+  protected def unparsableContentType(contentType: String) = ???
+  protected def responseNotJson(mimeType: String) = ???
+  protected def illegalCharsetName(charsetName: String) = ???
+  protected def unsupportedCharset(charsetName: String) = ???
+  protected def noBodyInResponse() = ???
 
-  def delete(url: SimpleURL): Managed[Response]
+  protected def charsetFor(responseInfo: ResponseInfo): Charset = responseInfo.headers("content-type").headOption match {
+    case Some(ct) =>
+      try {
+        val mimeType = new MimeType(ct)
+        if(mimeType.getBaseType != jsonContentTypeBase) responseNotJson(mimeType.getBaseType)
+        Option(mimeType.getParameter("charset")).map(Charset.forName).getOrElse(StandardCharsets.ISO_8859_1)
+      } catch {
+        case _: MimeTypeParseException =>
+          unparsableContentType(ct)
+        case e: IllegalCharsetNameException =>
+          illegalCharsetName(e.getCharsetName)
+        case e: UnsupportedCharsetException =>
+          unsupportedCharset(e.getCharsetName)
+      }
+    case None =>
+      noContentTypeInResponse()
+  }
 
-  def post[T : JsonCodec](url: SimpleURL, body: T): Managed[Response]
-  def post(url: SimpleURL, body: Iterator[JsonEvent]): Managed[Response]
-  def post(url: SimpleURL, formContents: Iterable[(String, String)]): Managed[Response]
-  def postFile(url: SimpleURL, input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[Response]
+  private def jsonify(response: Managed[RawResponse]): Managed[Response] = new SimpleArm[Response] {
+    def flatMap[A](f: Response => A): A = {
+      for(raw <- response) yield {
+        val reader = new InputStreamReader(raw, charsetFor(raw.responseInfo))
+        val processed: Iterator[JsonEvent] with ResponseInfoProvider =
+          new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider {
+            def responseInfo = raw.responseInfo
+          }
+        f(processed)
+      }
+    }
+  }
 
-  def put[T : JsonCodec](url: SimpleURL, body: T): Managed[Response]
-  def put(url: SimpleURL, body: Iterator[JsonEvent]): Managed[Response]
-  def putFile(url: SimpleURL, input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[Response]
+  def getRaw(url: SimpleURL): Managed[RawResponse]
+  def get(url: SimpleURL) = jsonify(getRaw(url))
+
+  def deleteRaw(url: SimpleURL): Managed[RawResponse]
+  def delete(url: SimpleURL) = jsonify(deleteRaw(url))
+
+  def postJsonRaw[T : JsonCodec](url: SimpleURL, body: T): Managed[RawResponse]
+  def postJsonRaw(url: SimpleURL, body: Iterator[JsonEvent]): Managed[RawResponse]
+  def postFormRaw(url: SimpleURL, formContents: Iterable[(String, String)]): Managed[RawResponse]
+  def postFileRaw(url: SimpleURL, input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[RawResponse]
+  def postJson[T : JsonCodec](url: SimpleURL, body: T) = jsonify(postJsonRaw(url, body))
+  def postJson(url: SimpleURL, body: Iterator[JsonEvent]) = jsonify(postJsonRaw(url, body))
+  def postForm(url: SimpleURL, formContents: Iterable[(String, String)]) = jsonify(postFormRaw(url, formContents))
+  def postFile(url: SimpleURL, input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase) =
+    jsonify(postFileRaw(url, input, file, field, contentType))
+
+  def putJsonRaw[T : JsonCodec](url: SimpleURL, body: T): Managed[RawResponse]
+  def putJsonRaw(url: SimpleURL, body: Iterator[JsonEvent]): Managed[RawResponse]
+  def putFileRaw(url: SimpleURL, input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[RawResponse]
+  def putJson[T : JsonCodec](url: SimpleURL, body: T) = jsonify(putJsonRaw(url, body))
+  def putJson(url: SimpleURL, body: Iterator[JsonEvent]) = jsonify(putJsonRaw(url, body))
+  def putFile(url: SimpleURL, input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase) =
+    jsonify(putFileRaw(url, input, file, field, contentType))
 }
 
 object HttpClient {
@@ -54,6 +105,7 @@ object HttpClient {
   val formContentType = ContentType.create(formContentTypeBase)
   val octetStreamContentTypeBase = "application/octet-stream"
   val octetStreamContentType = ContentType.create(octetStreamContentTypeBase)
+
 }
 
 class HttpClientHttpClient(val connectionTimeout: Int,
@@ -97,32 +149,7 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     httpclient.getConnectionManager.shutdown()
   }
 
-  def noContentTypeInResponse() = ???
-  def unparsableContentType(contentType: String) = ???
-  def responseNotJson(mimeType: String) = ???
-  def illegalCharsetName(charsetName: String) = ???
-  def unsupportedCharset(charsetName: String) = ???
-  def noBodyInResponse() = ???
-
-  private def charsetFor(entity: HttpEntity): Charset = {
-    val contentType = entity.getContentType
-    if(contentType == null) noContentTypeInResponse()
-
-    try {
-      val mimeType = new MimeType(contentType.getValue)
-      if(mimeType.getBaseType != jsonContentTypeBase) responseNotJson(mimeType.getBaseType)
-      Option(mimeType.getParameter("charset")).map(Charset.forName).getOrElse(StandardCharsets.ISO_8859_1)
-    } catch {
-      case _: MimeTypeParseException =>
-        unparsableContentType(contentType.getValue)
-      case e: IllegalCharsetNameException =>
-        illegalCharsetName(e.getCharsetName)
-      case e: UnsupportedCharsetException =>
-        unsupportedCharset(e.getCharsetName)
-    }
-  }
-
-  private def send[A](req: HttpUriRequest, f: Response => A) = {
+  private def send[A](req: HttpUriRequest, f: RawResponse => A): A = {
     val response = try {
       httpclient.execute(req)
     } catch {
@@ -133,16 +160,16 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     if(entity != null) {
       val content = entity.getContent
       try {
-        val reader = new InputStreamReader(content, charsetFor(entity))
-        val responseJsonStream: Iterator[JsonEvent] with ResponseInfoProvider = new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider with ResponseInfo {
-          def responseInfo = this
-          val resultCode = response.getStatusLine.getStatusCode
+        val processed: InputStream with ResponseInfoProvider =
+          new FilterInputStream(content) with ResponseInfoProvider with ResponseInfo {
+            def responseInfo = this
+            val resultCode = response.getStatusLine.getStatusCode
 
-          // I am *fairly* sure (from code-diving) that the value field of a header
-          // parsed from a response will never be null.
-          def headers(name: String) = response.getHeaders(name).map(_.getValue)
-        }
-        f(responseJsonStream)
+            // I am *fairly* sure (from code-diving) that the value field of a header
+            // parsed from a response will never be null.
+            def headers(name: String) = response.getHeaders(name).map(_.getValue)
+          }
+        f(processed)
       } catch {
         case e: Exception =>
           req.abort()
@@ -155,28 +182,28 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     }
   }
 
-  def get(url: SimpleURL): Managed[Response] = new SimpleArm[Response] {
-    def flatMap[A](f: Response => A): A = {
+  def getRaw(url: SimpleURL): Managed[RawResponse] = new SimpleArm[RawResponse] {
+    def flatMap[A](f: RawResponse => A): A = {
       init()
       send(new HttpGet(url.toString), f)
     }
   }
 
-  def delete(url: SimpleURL): Managed[Response] = new SimpleArm[Response] {
-    def flatMap[A](f: Response => A): A = {
+  def deleteRaw(url: SimpleURL): Managed[RawResponse] = new SimpleArm[RawResponse] {
+    def flatMap[A](f: RawResponse => A): A = {
       init()
       send(new HttpDelete(url.toString), f)
     }
   }
 
-  def post[T: JsonCodec](url: SimpleURL, body: T): Managed[Response] =
-    post(url, JValueEventIterator(JsonCodec[T].encode(body)))
+  def postJsonRaw[T: JsonCodec](url: SimpleURL, body: T): Managed[RawResponse] =
+    postJsonRaw(url, JValueEventIterator(JsonCodec[T].encode(body)))
 
-  def post(url: SimpleURL, body: Iterator[JsonEvent]): Managed[Response] =
+  def postJsonRaw(url: SimpleURL, body: Iterator[JsonEvent]): Managed[RawResponse] =
     streamBody(url, body, new HttpPost(_))
 
-  def post(url: SimpleURL, formContents: Iterable[(String, String)]): Managed[Response] = new SimpleArm[Response] {
-    def flatMap[A](f: Response => A): A = {
+  def postFormRaw(url: SimpleURL, formContents: Iterable[(String, String)]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+    def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new FormReader(formContents), StandardCharsets.UTF_8), -1, formContentType)
       sendEntity.setChunked(true)
@@ -186,20 +213,20 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     }
   }
 
-  def postFile(url: SimpleURL, input: Managed[InputStream], file: String, field: String, contentType: String): Managed[Response] =
+  def postFileRaw(url: SimpleURL, input: Managed[InputStream], file: String, field: String, contentType: String): Managed[RawResponse] =
     streamFile(url, input, file, field, contentType, new HttpPost(_))
 
-  def put[T: JsonCodec](url: SimpleURL, body: T): Managed[Response] =
-    put(url, JValueEventIterator(JsonCodec[T].encode(body)))
+  def putJsonRaw[T: JsonCodec](url: SimpleURL, body: T): Managed[RawResponse] =
+    putJsonRaw(url, JValueEventIterator(JsonCodec[T].encode(body)))
 
-  def put(url: SimpleURL, body: Iterator[JsonEvent]): Managed[Response] =
+  def putJsonRaw(url: SimpleURL, body: Iterator[JsonEvent]): Managed[RawResponse] =
     streamBody(url, body, new HttpPut(_))
 
-  def putFile(url: SimpleURL, input: Managed[InputStream], file: String, field: String, contentType: String): Managed[Response] =
+  def putFileRaw(url: SimpleURL, input: Managed[InputStream], file: String, field: String, contentType: String): Managed[RawResponse] =
     streamFile(url, input, file, field, contentType, new HttpPut(_))
 
-  private def streamBody(url: SimpleURL, body: Iterator[JsonEvent], method: String => HttpEntityEnclosingRequestBase): Managed[Response] = new SimpleArm[Response] {
-    def flatMap[A](f: Response => A): A = {
+  private def streamBody(url: SimpleURL, body: Iterator[JsonEvent], method: String => HttpEntityEnclosingRequestBase): Managed[RawResponse] = new SimpleArm[RawResponse] {
+    def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(body), StandardCharsets.UTF_8), -1, jsonContentType)
       sendEntity.setChunked(true)
@@ -209,9 +236,9 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     }
   }
 
-  private def streamFile(url: SimpleURL, input: Managed[InputStream], file: String, field: String, contentType: String, method: String => HttpEntityEnclosingRequestBase): Managed[Response] =
-    new SimpleArm[Response] {
-      def flatMap[A](f: Response => A): A = {
+  private def streamFile(url: SimpleURL, input: Managed[InputStream], file: String, field: String, contentType: String, method: String => HttpEntityEnclosingRequestBase): Managed[RawResponse] =
+    new SimpleArm[RawResponse] {
+      def flatMap[A](f: RawResponse => A): A = {
         init()
         for(inputStream <- input) yield {
           val sendEntity = new MultipartEntity
@@ -227,10 +254,10 @@ class HttpClientHttpClient(val connectionTimeout: Int,
 object Blah extends App {
   for {
     cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000, continueTimeout = None))
-    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.final.mjson.gz"))
+    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
-    resp <- cli.post(SimpleURL.http("localhost", port = 10000), new FusedBlockJsonEventIterator(reader))
+    resp <- cli.postJson(SimpleURL.http("localhost", port = 10000), new FusedBlockJsonEventIterator(reader))
     /*
     compressed <- managed(new FileInputStream("/home/robertm/tiny.gz"))
     resp <- cli.postFile(SimpleURL.http("localhost", port = 10000), managed(new GZIPInputStream(compressed)))
