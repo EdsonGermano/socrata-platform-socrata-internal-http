@@ -10,15 +10,14 @@ import com.rojoma.simplearm.util._
 import com.rojoma.json.io._
 import com.rojoma.json.codec.JsonCodec
 import java.util.zip.GZIPInputStream
-import org.apache.http.{HttpEntity, HttpResponse}
 import javax.activation.{MimeTypeParseException, MimeType}
 import java.lang.reflect.UndeclaredThrowableException
-import com.rojoma.simplearm
-import org.apache.http.entity.mime.{FormBodyPart, MultipartEntity}
+import org.apache.http.entity.mime.MultipartEntity
 import org.apache.http.entity.mime.content.InputStreamBody
 import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
-import scala.Some
+import org.apache.http.conn.ConnectTimeoutException
+import java.net.ConnectException
 
 trait ResponseInfo {
   def resultCode: Int
@@ -29,19 +28,35 @@ trait ResponseInfoProvider {
   def responseInfo: ResponseInfo
 }
 
+class HttpClientException extends Exception
+class ConnectTimeout extends HttpClientException
+class ConnectFailed extends HttpClientException // failed for not-timeout reasons
+class ReceiveTimeout extends HttpClientException
+class NoBodyInResponse extends HttpClientException
+
+class ContentTypeException extends HttpClientException
+class NoContentTypeInResponse extends ContentTypeException
+class MultipleContentTypesInResponse extends ContentTypeException
+class UnparsableContentType(val contentType: String) extends ContentTypeException
+class UnexpectedContentType(val got: String, val expected: String) extends ContentTypeException
+class IllegalCharsetName(val charsetName: String) extends ContentTypeException
+class UnsupportedCharset(val charsetName: String) extends ContentTypeException
+
 trait HttpClient extends Closeable {
   import HttpClient._
 
   type Response = Iterator[JsonEvent] with ResponseInfoProvider
   type RawResponse = InputStream with ResponseInfoProvider
 
-  protected def noContentTypeInResponse() = ???
-  protected def multipleContentTypesInResponse() = ???
-  protected def unparsableContentType(contentType: String) = ???
-  protected def responseNotJson(mimeType: String) = ???
-  protected def illegalCharsetName(charsetName: String) = ???
-  protected def unsupportedCharset(charsetName: String) = ???
-  protected def noBodyInResponse() = ???
+  protected def connectTimeout() = throw new ConnectTimeout
+  protected def connectFailed() = throw new ConnectFailed
+  protected def noContentTypeInResponse() = throw new NoContentTypeInResponse
+  protected def multipleContentTypesInResponse() = throw new MultipleContentTypesInResponse
+  protected def unparsableContentType(contentType: String) = throw new UnparsableContentType(contentType)
+  protected def responseNotJson(mimeType: String) = throw new UnexpectedContentType(got = mimeType, expected = jsonContentTypeBase)
+  protected def illegalCharsetName(charsetName: String) = throw new IllegalCharsetName(charsetName)
+  protected def unsupportedCharset(charsetName: String) = throw new UnsupportedCharset(charsetName)
+  protected def noBodyInResponse() = throw new NoBodyInResponse
 
   protected def charsetFor(responseInfo: ResponseInfo): Charset = responseInfo.headers("content-type") match {
     case Array(ct) =>
@@ -156,6 +171,10 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     val response = try {
       httpclient.execute(req)
     } catch {
+      case _: ConnectTimeoutException =>
+        connectTimeout()
+      case e: ConnectException =>
+        connectFailed()
       case e: UndeclaredThrowableException =>
         throw e.getCause
     }
@@ -256,7 +275,7 @@ class HttpClientHttpClient(val connectionTimeout: Int,
 
 object Blah extends App {
   for {
-    cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000, continueTimeout = None))
+    cli <- managed[HttpClient](new HttpClientHttpClient(1000, 1000, continueTimeout = None))
     compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
