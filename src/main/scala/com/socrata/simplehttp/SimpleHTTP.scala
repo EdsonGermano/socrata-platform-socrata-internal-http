@@ -17,7 +17,9 @@ import org.apache.http.entity.mime.content.InputStreamBody
 import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
 import org.apache.http.conn.ConnectTimeoutException
-import java.net.ConnectException
+import java.net.{InetAddress, InetSocketAddress, SocketAddress, ConnectException}
+import java.util.concurrent.{Executors, ExecutorService}
+import com.socrata.pingpong.Ping
 
 trait ResponseInfo {
   def resultCode: Int
@@ -128,6 +130,7 @@ object HttpClient {
 
 class HttpClientHttpClient(val connectionTimeout: Int,
                            val dataTimeout: Int,
+                           threadPool: ExecutorService,
                            continueTimeout: Option[Int] = Some(3000),
                            userAgent: String = "HttpClientHttpClient")
   extends HttpClient
@@ -143,24 +146,23 @@ class HttpClientHttpClient(val connectionTimeout: Int,
   @volatile private[this] var initialized = false
 
   private def init() {
-    if(!initialized) {
-      synchronized {
-        if(!initialized) {
-          val params = httpclient.getParams
-          HttpConnectionParams.setConnectionTimeout(params, connectionTimeout)
-          HttpConnectionParams.setSoTimeout(params, dataTimeout)
-          HttpProtocolParams.setUserAgent(params, userAgent)
-          continueTimeout match {
-            case Some(timeout) =>
-              HttpProtocolParams.setUseExpectContinue(params, true)
-              params.setIntParameter(CoreProtocolPNames.WAIT_FOR_CONTINUE, timeout) // no option for this one?
-            case None =>
-              HttpProtocolParams.setUseExpectContinue(params, false)
-          }
-          initialized = true
+    def reallyInit() = synchronized {
+      if(!initialized) {
+        val params = httpclient.getParams
+        HttpConnectionParams.setConnectionTimeout(params, connectionTimeout)
+        HttpConnectionParams.setSoTimeout(params, dataTimeout)
+        HttpProtocolParams.setUserAgent(params, userAgent)
+        continueTimeout match {
+          case Some(timeout) =>
+            HttpProtocolParams.setUseExpectContinue(params, true)
+            params.setIntParameter(CoreProtocolPNames.WAIT_FOR_CONTINUE, timeout) // no option for this one?
+          case None =>
+            HttpProtocolParams.setUseExpectContinue(params, false)
         }
+        initialized = true
       }
     }
+    if(!initialized) reallyInit()
   }
 
   def close() {
@@ -168,6 +170,20 @@ class HttpClientHttpClient(val connectionTimeout: Int,
   }
 
   private def send[A](req: HttpUriRequest, f: RawResponse => A): A = {
+    val future = threadPool.submit(new Runnable() {
+      val receive: Array[Byte] = "hello".getBytes
+      val ping = new Ping(new InetSocketAddress(InetAddress.getByName(req.getURI.getHost), req.getURI.getPort), receive, 1000, 5)
+      def run() {
+        try {
+          ping.go()
+          req.abort()
+        } catch {
+          case _: InterruptedException =>
+          // pass
+        }
+      }
+    })
+
     val response = try {
       httpclient.execute(req)
     } catch {
@@ -177,7 +193,10 @@ class HttpClientHttpClient(val connectionTimeout: Int,
         connectFailed()
       case e: UndeclaredThrowableException =>
         throw e.getCause
+    } finally {
+      future.cancel(true)
     }
+
     val entity = response.getEntity
     if(entity != null) {
       val content = entity.getContent
@@ -274,8 +293,12 @@ class HttpClientHttpClient(val connectionTimeout: Int,
 }
 
 object Blah extends App {
+  implicit object ExecutorServiceResource extends com.rojoma.simplearm.Resource[ExecutorService] {
+    def close(a: ExecutorService) { a.shutdown() }
+  }
   for {
-    cli <- managed[HttpClient](new HttpClientHttpClient(1000, 1000, continueTimeout = None))
+    executor <- managed(Executors.newCachedThreadPool())
+    cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000, executor, continueTimeout = None))
     compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
