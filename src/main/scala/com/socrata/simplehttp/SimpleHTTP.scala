@@ -125,12 +125,9 @@ object HttpClient {
   val formContentType = ContentType.create(formContentTypeBase)
   val octetStreamContentTypeBase = "application/octet-stream"
   val octetStreamContentType = ContentType.create(octetStreamContentTypeBase)
-
 }
 
-class HttpClientHttpClient(val connectionTimeout: Int,
-                           val dataTimeout: Int,
-                           threadPool: ExecutorService,
+class HttpClientHttpClient(threadPool: ExecutorService,
                            continueTimeout: Option[Int] = Some(3000),
                            userAgent: String = "HttpClientHttpClient")
   extends HttpClient
@@ -144,13 +141,12 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     new DefaultHttpClient(connManager)
   }
   @volatile private[this] var initialized = false
+  private val log = org.slf4j.LoggerFactory.getLogger(classOf[HttpClientHttpClient])
 
   private def init() {
     def reallyInit() = synchronized {
       if(!initialized) {
         val params = httpclient.getParams
-        HttpConnectionParams.setConnectionTimeout(params, connectionTimeout)
-        HttpConnectionParams.setSoTimeout(params, dataTimeout)
         HttpProtocolParams.setUserAgent(params, userAgent)
         continueTimeout match {
           case Some(timeout) =>
@@ -180,7 +176,11 @@ class HttpClientHttpClient(val connectionTimeout: Int,
               req.abort()
             } catch {
               case _: InterruptedException =>
-              // pass
+                // pass
+              case e: Exception =>
+                log.warn("Unexpected exception while pinging", e)
+                req.abort()
+                throw e
             }
           }
         })
@@ -299,17 +299,20 @@ class HttpClientHttpClient(val connectionTimeout: Int,
 }
 
 object Blah extends App {
+  import java.net._
+  import scala.concurrent.duration._
   implicit object ExecutorServiceResource extends com.rojoma.simplearm.Resource[ExecutorService] {
     def close(a: ExecutorService) { a.shutdown() }
   }
-  val ping = None
+
+  val ping = PingSpec(new InetSocketAddress(InetAddress.getByName("10.0.2.250"), 1234), Array.empty, 1.second, 5)
   for {
     executor <- managed(Executors.newCachedThreadPool())
-    cli <- managed[HttpClient](new HttpClientHttpClient(100000, 100000, executor, continueTimeout = None))
+    cli <- managed[HttpClient](new HttpClientHttpClient(executor, continueTimeout = None))
     compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
-    resp <- cli.postJson(SimpleURL.http("localhost", port = 10000), ping, new FusedBlockJsonEventIterator(reader))
+    resp <- cli.postJson(SimpleURL.http("10.0.2.250", port = 10000), Some(ping), new FusedBlockJsonEventIterator(reader))
     /*
     compressed <- managed(new FileInputStream("/home/robertm/tiny.gz"))
     resp <- cli.postFile(SimpleURL.http("localhost", port = 10000), managed(new GZIPInputStream(compressed)))

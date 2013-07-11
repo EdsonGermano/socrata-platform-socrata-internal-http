@@ -15,6 +15,7 @@ case class PingSpec(address: SocketAddress, hostFingerprint: Array[Byte], interv
 }
 
 class Ping(pingSpec: PingSpec) {
+  import Ping._
   import pingSpec._
 
   private val intervalNS = interval.toNanos
@@ -71,18 +72,22 @@ class Ping(pingSpec: PingSpec) {
         val deadline = System.nanoTime + intervalNS
 
         try {
+          log.trace("Ping?")
           socket.write(txPacket)
 
           if(!awaitGoodPacket(deadline, counter)) {
             missed += 1
+            log.debug("No response; missed {} packet(s) in a row", missed)
             if(missed >= missable) return
           } else {
+            log.trace("Pong!")
             missed = 0
             sleepTo(deadline)
           }
         } catch {
           case e: IOException =>
             missed += 1
+            log.debug("IO exception while pinging; counting this as missed ({} in a row now)", missed, e)
             if(missed >= missable) return
             sleepTo(deadline)
         }
@@ -143,9 +148,6 @@ class Ping(pingSpec: PingSpec) {
   }
 }
 
-object Ping extends App {
-  import java.net._
-  val spec = PingSpec(new InetSocketAddress(InetAddress.getByName("home.rojoma.com"), 1111), Array[Byte](1,2,3,4), 1.second, 5)
-  val ping = new com.socrata.pingpong.Ping(spec)
-  ping.go()
+object Ping {
+  val log = org.slf4j.LoggerFactory.getLogger(classOf[Ping])
 }
