@@ -173,7 +173,7 @@ class HttpClientHttpClient(val connectionTimeout: Int,
     val future = pingTarget match {
       case Some(spec) =>
         threadPool.submit(new Runnable() {
-          val ping = new Ping(spec, 1000, 5)
+          val ping = new Ping(spec)
           def run() {
             try {
               ping.go()

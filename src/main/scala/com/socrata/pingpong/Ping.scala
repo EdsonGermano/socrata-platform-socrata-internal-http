@@ -1,5 +1,6 @@
 package com.socrata.pingpong
 
+import scala.concurrent.duration._
 import java.net.SocketAddress
 import java.nio.channels.spi.SelectorProvider
 import java.nio.ByteBuffer
@@ -9,13 +10,14 @@ import java.nio.channels.{Selector, SelectionKey, DatagramChannel}
 import scala.annotation.tailrec
 import java.io.IOException
 
-case class PingSpec(address: SocketAddress, hostFingerprint: Array[Byte])
-
-class Ping(pingSpec: PingSpec, interval: Int, missable: Int, rng: Random = new Random) {
-  require(interval > 0, "interval")
+case class PingSpec(address: SocketAddress, hostFingerprint: Array[Byte], interval: FiniteDuration, missable: Int, rng: Random = new Random) {
   require(missable >= 0, "missable")
+}
 
-  val intervalNS = interval * 1000000L
+class Ping(pingSpec: PingSpec) {
+  import pingSpec._
+
+  private val intervalNS = interval.toNanos
 
   // runs the mainloop, sending a packet every "interval" seconds, until "missable"
   // have not been returned in a row.  Then it exits.
@@ -34,7 +36,7 @@ class Ping(pingSpec: PingSpec, interval: Int, missable: Int, rng: Random = new R
       socket <- managed(selectorProvider.openDatagramChannel())
     } {
       socket.configureBlocking(false)
-      socket.connect(pingSpec.address)
+      socket.connect(address)
 
       new Op(selector, socket).go()
     }
@@ -55,7 +57,7 @@ class Ping(pingSpec: PingSpec, interval: Int, missable: Int, rng: Random = new R
     }
 
     val rxPacketBuffer =
-      ByteBuffer.allocate(txPacket.remaining + pingSpec.hostFingerprint.length + 1)
+      ByteBuffer.allocate(txPacket.remaining + hostFingerprint.length + 1)
 
     def go() {
       var counter = 0
@@ -134,7 +136,7 @@ class Ping(pingSpec: PingSpec, interval: Int, missable: Int, rng: Random = new R
       }
 
       if(!checkBytes(me)) return false
-      if(!checkBytes(pingSpec.hostFingerprint)) return false
+      if(!checkBytes(hostFingerprint)) return false
 
       true
     }
@@ -143,7 +145,7 @@ class Ping(pingSpec: PingSpec, interval: Int, missable: Int, rng: Random = new R
 
 object Ping extends App {
   import java.net._
-  val spec = PingSpec(new InetSocketAddress(InetAddress.getByName("home.rojoma.com"), 1111), Array[Byte](1,2,3,4))
-  val ping = new com.socrata.pingpong.Ping(spec, 1000, 5)
+  val spec = PingSpec(new InetSocketAddress(InetAddress.getByName("home.rojoma.com"), 1111), Array[Byte](1,2,3,4), 1.second, 5)
+  val ping = new com.socrata.pingpong.Ping(spec)
   ping.go()
 }
