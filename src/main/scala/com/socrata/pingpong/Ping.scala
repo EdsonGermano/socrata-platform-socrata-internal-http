@@ -9,7 +9,9 @@ import java.nio.channels.{Selector, SelectionKey, DatagramChannel}
 import scala.annotation.tailrec
 import java.io.IOException
 
-class Ping(address: SocketAddress, receive: Array[Byte], interval: Int, missable: Int, rng: Random = new Random) {
+case class PingSpec(address: SocketAddress, hostFingerprint: Array[Byte])
+
+class Ping(pingSpec: PingSpec, interval: Int, missable: Int, rng: Random = new Random) {
   require(interval > 0, "interval")
   require(missable >= 0, "missable")
 
@@ -32,7 +34,7 @@ class Ping(address: SocketAddress, receive: Array[Byte], interval: Int, missable
       socket <- managed(selectorProvider.openDatagramChannel())
     } {
       socket.configureBlocking(false)
-      socket.connect(address)
+      socket.connect(pingSpec.address)
 
       new Op(selector, socket).go()
     }
@@ -53,7 +55,7 @@ class Ping(address: SocketAddress, receive: Array[Byte], interval: Int, missable
     }
 
     val rxPacketBuffer =
-      ByteBuffer.allocate(txPacket.remaining + receive.length + 1)
+      ByteBuffer.allocate(txPacket.remaining + pingSpec.hostFingerprint.length + 1)
 
     def go() {
       var counter = 0
@@ -132,7 +134,7 @@ class Ping(address: SocketAddress, receive: Array[Byte], interval: Int, missable
       }
 
       if(!checkBytes(me)) return false
-      if(!checkBytes(receive)) return false
+      if(!checkBytes(pingSpec.hostFingerprint)) return false
 
       true
     }
@@ -141,6 +143,7 @@ class Ping(address: SocketAddress, receive: Array[Byte], interval: Int, missable
 
 object Ping extends App {
   import java.net._
-  val ping = new com.socrata.pingpong.Ping(new InetSocketAddress(InetAddress.getByName("home.rojoma.com"), 1111), Array[Byte](1,2,3,4), 1000, 5)
+  val spec = PingSpec(new InetSocketAddress(InetAddress.getByName("home.rojoma.com"), 1111), Array[Byte](1,2,3,4))
+  val ping = new com.socrata.pingpong.Ping(spec, 1000, 5)
   ping.go()
 }
