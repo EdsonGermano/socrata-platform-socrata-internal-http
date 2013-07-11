@@ -188,42 +188,44 @@ class HttpClientHttpClient(val connectionTimeout: Int,
         new NoopFuture(())
     }
 
-    val response = try {
-      httpclient.execute(req)
-    } catch {
-      case _: ConnectTimeoutException =>
-        connectTimeout()
-      case e: ConnectException =>
-        connectFailed()
-      case e: UndeclaredThrowableException =>
-        throw e.getCause
+    try {
+      val response = try {
+        httpclient.execute(req)
+      } catch {
+        case _: ConnectTimeoutException =>
+          connectTimeout()
+        case e: ConnectException =>
+          connectFailed()
+        case e: UndeclaredThrowableException =>
+          throw e.getCause
+      }
+
+      val entity = response.getEntity
+      if(entity != null) {
+        val content = entity.getContent
+        try {
+          val processed: InputStream with ResponseInfoProvider =
+            new FilterInputStream(content) with ResponseInfoProvider with ResponseInfo {
+              def responseInfo = this
+              val resultCode = response.getStatusLine.getStatusCode
+
+              // I am *fairly* sure (from code-diving) that the value field of a header
+              // parsed from a response will never be null.
+              def headers(name: String) = response.getHeaders(name).map(_.getValue)
+            }
+          f(processed)
+        } catch {
+          case e: Exception =>
+            req.abort()
+            throw e
+        } finally {
+          content.close()
+        }
+      } else {
+        noBodyInResponse()
+      }
     } finally {
       future.cancel(true)
-    }
-
-    val entity = response.getEntity
-    if(entity != null) {
-      val content = entity.getContent
-      try {
-        val processed: InputStream with ResponseInfoProvider =
-          new FilterInputStream(content) with ResponseInfoProvider with ResponseInfo {
-            def responseInfo = this
-            val resultCode = response.getStatusLine.getStatusCode
-
-            // I am *fairly* sure (from code-diving) that the value field of a header
-            // parsed from a response will never be null.
-            def headers(name: String) = response.getHeaders(name).map(_.getValue)
-          }
-        f(processed)
-      } catch {
-        case e: Exception =>
-          req.abort()
-          throw e
-      } finally {
-        content.close()
-      }
-    } else {
-      noBodyInResponse()
     }
   }
 
