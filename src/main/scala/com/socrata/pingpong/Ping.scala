@@ -87,7 +87,7 @@ class Ping(pingSpec: PingSpec) {
         } catch {
           case e: IOException =>
             missed += 1
-            log.debug("IO exception while pinging; counting this as missed ({} in a row now)", missed, e)
+            log.debug("IO exception while pinging; counting this as missed ({} in a row now)", missed)
             if(missed >= missable) return
             sleepTo(deadline)
         }
