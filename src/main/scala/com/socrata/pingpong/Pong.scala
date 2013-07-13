@@ -10,6 +10,8 @@ import java.io.IOException
 import java.util.concurrent.CountDownLatch
 
 class Pong(address: InetSocketAddress, send: Array[Byte], rng: Random = new Random) {
+  private val log = org.slf4j.LoggerFactory.getLogger(classOf[Pong])
+
   // runs the mainloop, responding to every ping packet it receives.
   //
   // The packets that it sends consist of the following:
@@ -30,11 +32,15 @@ class Pong(address: InetSocketAddress, send: Array[Byte], rng: Random = new Rand
           recvBuf.clear()
           val respondTo = socket.receive(recvBuf)
           try {
+            log.trace("Ping from {}", respondTo)
             recvBuf.put(send).flip()
             socket.send(recvBuf, respondTo)
+            log.trace("Pong!")
           } catch {
-            case e: IOException => // ignore
-            case e: BufferOverflowException => //ignore
+            case e: IOException =>
+              log.trace("IO exception sending to the peer; ignoring")
+            case e: BufferOverflowException =>
+              log.trace("packet too large to add reply and still fit in 512 bytes; ignoring")
           }
         }
       }

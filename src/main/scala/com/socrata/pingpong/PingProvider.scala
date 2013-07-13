@@ -26,7 +26,16 @@ final class PingTarget(val host: InetAddress, val port: Int, val response: Array
   }
 }
 
-class PingProvider(interval: FiniteDuration, range: FiniteDuration, missable: Int, executor: Executor, rng: Random = new Random) extends Closeable {
+trait PingProvider {
+  def startPinging(target: PingTarget)(onFailure: => Unit): Closeable
+}
+
+object NoopPingProvider extends PingProvider with Closeable {
+  def startPinging(target: PingTarget)(onFailure: => Unit): Closeable = this
+  def close() {}
+}
+
+class InetPingProvider(interval: FiniteDuration, range: FiniteDuration, missable: Int, executor: Executor, rng: Random = new Random) extends PingProvider with Closeable {
   private val intervalMS = interval.toMillis
   private val rangeMS = range.toMillis
 
@@ -60,8 +69,8 @@ class PingProvider(interval: FiniteDuration, range: FiniteDuration, missable: In
     }
   }
 
-  def startPinging(target: PingTarget, onFailure: () => Unit): Closeable = {
-    val result = new OnFailure(onFailure)
+  def startPinging(target: PingTarget)(onFailure: => Unit): Closeable = {
+    val result = new OnFailure(() => onFailure)
     impl.addJob(new PendingJob(target, result))
     result
   }
@@ -142,7 +151,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
       p.clear()
       p.putLong(counter)
       p.put(me)
-      p.clear()
+      p.flip()
     }
 
     def isExpectedPacket(packet: ByteBuffer): Boolean = {
@@ -245,7 +254,10 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
   }
 
   private def processRxPacket(from: InetSocketAddress) {
-    if(rxPacket.remaining < rxPacketHeader) return
+    if(rxPacket.remaining < rxPacketHeader) {
+      log.trace("Received a packet from {} smaller than the packet header; ignoring", from)
+      return
+    }
 
     val responseBytes = new Array[Byte](rxPacket.remaining - rxPacketHeader)
     rxPacket.position(rxPacketHeader)
@@ -325,7 +337,6 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
     try {
       log.trace("Sending ping to {}", job.target)
       job.fillTxPacket()
-      txPacket.clear()
       socket.send(txPacket, job.socketAddress)
     } catch {
       case e: IOException =>
@@ -388,11 +399,11 @@ object BlahPing extends App {
   }
 
   using(Executors.newCachedThreadPool()) { executor =>
-    using(new PingProvider(1.second, 500.milliseconds, 5, executor)) { pp =>
+    using(new InetPingProvider(1.second, 500.milliseconds, 5, executor)) { pp =>
       pp.start()
       val sem = new Semaphore(0)
       for(i <- 1 to 15) {
-        pp.startPinging(new PingTarget(InetAddress.getByName("127.0.0." + (i % 3)), 12345, "hello".getBytes), () => { println("Bad " + (i%3) + " :("); sem.release() })
+        pp.startPinging(new PingTarget(InetAddress.getByName("127.0.0." + (i % 3)), 12345, "hello".getBytes)) { println("Bad " + (i%3) + " :("); sem.release() }
       }
       // pp.startPinging(new PingTarget(InetAddress.getByName("rojoma.com"), 12345, Array[Byte](0x41, 0x42, 0x43)), () => { println("Bad 2 :("); sem.release() })
       sem.acquire(10)
@@ -402,6 +413,6 @@ object BlahPing extends App {
 }
 
 object BlahPong extends App {
-  val pong = new Pong(new InetSocketAddress(InetAddress.getByName("127.0.0.1"), 12345), "hello".getBytes)
+  val pong = new Pong(new InetSocketAddress(InetAddress.getLoopbackAddress, 12345), "hello".getBytes)
   pong.go()
 }

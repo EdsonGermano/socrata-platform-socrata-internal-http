@@ -19,7 +19,7 @@ import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConne
 import org.apache.http.conn.ConnectTimeoutException
 import java.net.ConnectException
 import java.util.concurrent.{Executors, ExecutorService}
-import com.socrata.pingpong.{PingSpec, Ping}
+import com.socrata.pingpong.{InetPingProvider, PingTarget, PingProvider}
 
 trait ResponseInfo {
   def resultCode: Int
@@ -93,28 +93,28 @@ trait HttpClient extends Closeable {
     }
   }
 
-  def getRaw(url: SimpleURL, ping: Option[PingSpec]): Managed[RawResponse]
-  def get(url: SimpleURL, ping: Option[PingSpec]) = jsonify(getRaw(url, ping))
+  def getRaw(url: SimpleURL, ping: Option[PingTarget]): Managed[RawResponse]
+  def get(url: SimpleURL, ping: Option[PingTarget]) = jsonify(getRaw(url, ping))
 
-  def deleteRaw(url: SimpleURL, ping: Option[PingSpec]): Managed[RawResponse]
-  def delete(url: SimpleURL, ping: Option[PingSpec]) = jsonify(deleteRaw(url, ping))
+  def deleteRaw(url: SimpleURL, ping: Option[PingTarget]): Managed[RawResponse]
+  def delete(url: SimpleURL, ping: Option[PingTarget]) = jsonify(deleteRaw(url, ping))
 
-  def postJsonRaw[T : JsonCodec](url: SimpleURL, ping: Option[PingSpec], body: T): Managed[RawResponse]
-  def postJsonRaw(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent]): Managed[RawResponse]
-  def postFormRaw(url: SimpleURL, ping: Option[PingSpec], formContents: Iterable[(String, String)]): Managed[RawResponse]
-  def postFileRaw(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[RawResponse]
-  def postJson[T : JsonCodec](url: SimpleURL, ping: Option[PingSpec], body: T) = jsonify(postJsonRaw(url, ping, body))
-  def postJson(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent]) = jsonify(postJsonRaw(url, ping, body))
-  def postForm(url: SimpleURL, ping: Option[PingSpec], formContents: Iterable[(String, String)]) = jsonify(postFormRaw(url, ping, formContents))
-  def postFile(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase) =
+  def postJsonRaw[T : JsonCodec](url: SimpleURL, ping: Option[PingTarget], body: T): Managed[RawResponse]
+  def postJsonRaw(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent]): Managed[RawResponse]
+  def postFormRaw(url: SimpleURL, ping: Option[PingTarget], formContents: Iterable[(String, String)]): Managed[RawResponse]
+  def postFileRaw(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[RawResponse]
+  def postJson[T : JsonCodec](url: SimpleURL, ping: Option[PingTarget], body: T) = jsonify(postJsonRaw(url, ping, body))
+  def postJson(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent]) = jsonify(postJsonRaw(url, ping, body))
+  def postForm(url: SimpleURL, ping: Option[PingTarget], formContents: Iterable[(String, String)]) = jsonify(postFormRaw(url, ping, formContents))
+  def postFile(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase) =
     jsonify(postFileRaw(url, ping, input, file, field, contentType))
 
-  def putJsonRaw[T : JsonCodec](url: SimpleURL, ping: Option[PingSpec], body: T): Managed[RawResponse]
-  def putJsonRaw(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent]): Managed[RawResponse]
-  def putFileRaw(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[RawResponse]
-  def putJson[T : JsonCodec](url: SimpleURL, ping: Option[PingSpec], body: T) = jsonify(putJsonRaw(url, ping, body))
-  def putJson(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent]) = jsonify(putJsonRaw(url, ping, body))
-  def putFile(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase) =
+  def putJsonRaw[T : JsonCodec](url: SimpleURL, ping: Option[PingTarget], body: T): Managed[RawResponse]
+  def putJsonRaw(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent]): Managed[RawResponse]
+  def putFileRaw(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase): Managed[RawResponse]
+  def putJson[T : JsonCodec](url: SimpleURL, ping: Option[PingTarget], body: T) = jsonify(putJsonRaw(url, ping, body))
+  def putJson(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent]) = jsonify(putJsonRaw(url, ping, body))
+  def putFile(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String = "file", field: String = "file", contentType: String = octetStreamContentTypeBase) =
     jsonify(putFileRaw(url, ping, input, file, field, contentType))
 }
 
@@ -127,7 +127,11 @@ object HttpClient {
   val octetStreamContentType = ContentType.create(octetStreamContentTypeBase)
 }
 
-class HttpClientHttpClient(threadPool: ExecutorService,
+object NoopCloseable extends Closeable {
+  def close() {}
+}
+
+class HttpClientHttpClient(pingProvider: PingProvider,
                            continueTimeout: Option[Int] = Some(3000),
                            userAgent: String = "HttpClientHttpClient")
   extends HttpClient
@@ -165,30 +169,15 @@ class HttpClientHttpClient(threadPool: ExecutorService,
     httpclient.getConnectionManager.shutdown()
   }
 
-  private def send[A](req: HttpUriRequest, pingTarget: Option[PingSpec], f: RawResponse => A): A = {
-    val future = pingTarget match {
-      case Some(spec) =>
-        threadPool.submit(new Runnable() {
-          val ping = new Ping(spec)
-          def run() {
-            try {
-              ping.go()
-              req.abort()
-            } catch {
-              case _: InterruptedException =>
-                // pass
-              case e: Exception =>
-                log.warn("Unexpected exception while pinging", e)
-                req.abort()
-                throw e
-            }
-          }
-        })
-      case None =>
-        new NoopFuture(())
-    }
-
-    try {
+  private def send[A](req: HttpUriRequest, pingTarget: Option[PingTarget], f: RawResponse => A): A = {
+    for {
+      _ <- managed {
+        pingTarget match {
+          case Some(target) => pingProvider.startPinging(target) { req.abort() }
+          case None => NoopCloseable
+        }
+      }
+    } yield {
       val response = try {
         httpclient.execute(req)
       } catch {
@@ -224,32 +213,30 @@ class HttpClientHttpClient(threadPool: ExecutorService,
       } else {
         noBodyInResponse()
       }
-    } finally {
-      future.cancel(true)
     }
   }
 
-  def getRaw(url: SimpleURL, ping: Option[PingSpec]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def getRaw(url: SimpleURL, ping: Option[PingTarget]): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       send(new HttpGet(url.toString), ping, f)
     }
   }
 
-  def deleteRaw(url: SimpleURL, ping: Option[PingSpec]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def deleteRaw(url: SimpleURL, ping: Option[PingTarget]): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       send(new HttpDelete(url.toString), ping, f)
     }
   }
 
-  def postJsonRaw[T: JsonCodec](url: SimpleURL, ping: Option[PingSpec], body: T): Managed[RawResponse] =
+  def postJsonRaw[T: JsonCodec](url: SimpleURL, ping: Option[PingTarget], body: T): Managed[RawResponse] =
     postJsonRaw(url, ping, JValueEventIterator(JsonCodec[T].encode(body)))
 
-  def postJsonRaw(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent]): Managed[RawResponse] =
+  def postJsonRaw(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent]): Managed[RawResponse] =
     streamBody(url, ping, body, new HttpPost(_))
 
-  def postFormRaw(url: SimpleURL, ping: Option[PingSpec], formContents: Iterable[(String, String)]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def postFormRaw(url: SimpleURL, ping: Option[PingTarget], formContents: Iterable[(String, String)]): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new FormReader(formContents), StandardCharsets.UTF_8), -1, formContentType)
@@ -260,19 +247,19 @@ class HttpClientHttpClient(threadPool: ExecutorService,
     }
   }
 
-  def postFileRaw(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String, field: String, contentType: String): Managed[RawResponse] =
+  def postFileRaw(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String, field: String, contentType: String): Managed[RawResponse] =
     streamFile(url, ping, input, file, field, contentType, new HttpPost(_))
 
-  def putJsonRaw[T: JsonCodec](url: SimpleURL, ping: Option[PingSpec], body: T): Managed[RawResponse] =
+  def putJsonRaw[T: JsonCodec](url: SimpleURL, ping: Option[PingTarget], body: T): Managed[RawResponse] =
     putJsonRaw(url, ping, JValueEventIterator(JsonCodec[T].encode(body)))
 
-  def putJsonRaw(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent]): Managed[RawResponse] =
+  def putJsonRaw(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent]): Managed[RawResponse] =
     streamBody(url, ping, body, new HttpPut(_))
 
-  def putFileRaw(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String, field: String, contentType: String): Managed[RawResponse] =
+  def putFileRaw(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String, field: String, contentType: String): Managed[RawResponse] =
     streamFile(url, ping, input, file, field, contentType, new HttpPut(_))
 
-  private def streamBody(url: SimpleURL, ping: Option[PingSpec], body: Iterator[JsonEvent], method: String => HttpEntityEnclosingRequestBase): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  private def streamBody(url: SimpleURL, ping: Option[PingTarget], body: Iterator[JsonEvent], method: String => HttpEntityEnclosingRequestBase): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(body), StandardCharsets.UTF_8), -1, jsonContentType)
@@ -283,7 +270,7 @@ class HttpClientHttpClient(threadPool: ExecutorService,
     }
   }
 
-  private def streamFile(url: SimpleURL, ping: Option[PingSpec], input: Managed[InputStream], file: String, field: String, contentType: String, method: String => HttpEntityEnclosingRequestBase): Managed[RawResponse] =
+  private def streamFile(url: SimpleURL, ping: Option[PingTarget], input: Managed[InputStream], file: String, field: String, contentType: String, method: String => HttpEntityEnclosingRequestBase): Managed[RawResponse] =
     new SimpleArm[RawResponse] {
       def flatMap[A](f: RawResponse => A): A = {
         init()
@@ -305,14 +292,16 @@ object Blah extends App {
     def close(a: ExecutorService) { a.shutdown() }
   }
 
-  val ping = PingSpec(new InetSocketAddress(InetAddress.getByName("10.0.2.250"), 1234), Array.empty, 1.second, 5)
+  val ping = new PingTarget(InetAddress.getLoopbackAddress, 12345, "hello".getBytes)
   for {
     executor <- managed(Executors.newCachedThreadPool())
-    cli <- managed[HttpClient](new HttpClientHttpClient(executor, continueTimeout = None))
+    pingProvider <- managed(new InetPingProvider(5.seconds, 1.second, 5, executor))
+    _ <- unmanaged(pingProvider.start())
+    cli <- managed[HttpClient](new HttpClientHttpClient(pingProvider, continueTimeout = None))
     compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
     uncompressed <- managed(new GZIPInputStream(compressed))
     reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
-    resp <- cli.postJson(SimpleURL.http("10.0.2.250", port = 10000), Some(ping), new FusedBlockJsonEventIterator(reader))
+    resp <- cli.postJson(SimpleURL.http("localhost", port = 10000), Some(ping), new FusedBlockJsonEventIterator(reader))
     /*
     compressed <- managed(new FileInputStream("/home/robertm/tiny.gz"))
     resp <- cli.postFile(SimpleURL.http("localhost", port = 10000), managed(new GZIPInputStream(compressed)))
