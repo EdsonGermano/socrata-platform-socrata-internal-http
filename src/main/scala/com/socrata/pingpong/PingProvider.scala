@@ -70,10 +70,15 @@ class PingProvider(interval: FiniteDuration, range: FiniteDuration, missable: In
 private[pingpong] class PendingJob(val target: PingTarget, val onFailure: OnFailure)
 
 private[pingpong] class OnFailure(val op: () => Unit) extends Runnable with Closeable {
-  @volatile var isCancelled: Boolean = false
+  @volatile private var isCancelled: Boolean = false
+
+  def cancelled = isCancelled
 
   def run() {
-    if(!isCancelled) op()
+    if(!isCancelled) {
+      op()
+      close()
+    }
   }
 
   private var removeFrom: ConcurrentHashMap[OnFailure, Any] = null
@@ -112,7 +117,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
   val txPacket = ByteBuffer.allocate(txPacketCapacity)
   val rxPacket = ByteBuffer.allocate(512)
 
-  private class State(val target: PingTarget) extends IntrusivePriorityQueueNode {
+  private class Job(val target: PingTarget) extends IntrusivePriorityQueueNode {
     def waitUntil = priority
     def waitUntil_=(msSinceEpoch: Long) = priority = msSinceEpoch
 
@@ -122,7 +127,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
 
     val socketAddress = new InetSocketAddress(target.host, target.port)
 
-    val onFailures = new ConcurrentHashMap[OnFailure, Any]
+    val onFailures = new ConcurrentHashMap[OnFailure, Any] // really just want a ConcurrentHashSet
 
     var waiting = false // set to true after sending a ping; set to false on receipt of one
     var missed: Int = 0
@@ -160,8 +165,8 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
   }
 
   @volatile private var dead: Throwable = null
-  private val pings = new java.util.HashMap[PingTarget, State]
-  private val pingQueue = new IntrusivePriorityQueue[State]
+  private val pings = new java.util.HashMap[PingTarget, Job]
+  private val pingQueue = new IntrusivePriorityQueue[Job]
 
   private val newJobs = new ConcurrentLinkedQueue[PendingJob]()
   def addJob(job: PendingJob) {
@@ -201,7 +206,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
   }
 
   private def oneStep() {
-    log.trace("{}", pingQueue)
+    log.trace("{} distinct pingee(s) ", pingQueue.size)
     if(pingQueue.isEmpty) {
       log.trace("Zzzzzzzzzz....")
       try {
@@ -219,7 +224,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
 
       try {
         if(timeout <= 0) {
-          log.trace("Checking")
+          log.trace("Checking socket; no time to sleep")
           selector.selectNow()
         } else {
           log.trace("Zzzz ({}ms)", timeout)
@@ -247,17 +252,20 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
     rxPacket.get(responseBytes)
 
     val job = pings.get(new PingTarget(from.getAddress, from.getPort, responseBytes))
-    if(job != null) {
-      maybeDropJob(job)
+    if(job != null && !maybeDropJob(job)) {
       if(job.isExpectedPacket(rxPacket)) {
         log.trace("Received expected packet for {}", job)
         job.missed = 0
         job.waiting = false
+      } else {
+        log.warn("Received unexpected packet for {}; this probably means it's running very slowly", job)
       }
+    } else {
+      log.trace("Received a packet with no matching job")
     }
   }
 
-  private def maybeDropJob(job: State): Boolean = {
+  private def maybeDropJob(job: Job): Boolean = {
     if(job.onFailures.isEmpty) {
       log.trace("Dropping {} since it has no more failure-listeners", job)
       pings.remove(job.target)
@@ -289,7 +297,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
       if(!maybeDropJob(job)) {
         if(job.waiting) {
           log.trace("Missed a packet for {}", job)
-          missed(job, timeout = true)
+          missed(job)
         } else {
           sendPing(job)
         }
@@ -297,22 +305,22 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
     }
   }
 
-  private def missed(job: State, timeout: Boolean) {
+  private def missed(job: Job) {
     assert(pingQueue.contains(job))
     job.missed += 1
     if(job.missed > missable) {
-      log.trace("Job {} has missed too many in a row", job)
+      log.trace("More than {} packets missed in a row by {}", missable, job)
       pings.remove(job.target)
       pingQueue.remove(job)
       for(f <- job.onFailures.keys.asScala) {
-        if(!f.isCancelled) executor.execute(f)
+        if(!f.cancelled) executor.execute(f)
       }
-    } else if(timeout) {
+    } else {
       sendPing(job)
     }
   }
 
-  def sendPing(job: State) {
+  def sendPing(job: Job) {
     assert(pingQueue.contains(job))
     try {
       log.trace("Sending ping to {}", job.target)
@@ -321,7 +329,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
       socket.send(txPacket, job.socketAddress)
     } catch {
       case e: IOException =>
-        log.warn("Unexpected exception sending job to {}; this will probably end up counting as missed.", job.target.asInstanceOf[Any], e.asInstanceOf[Any])
+        log.warn("Unexpected exception sending ping to {}; this will probably end up counting as missed.", job.target.asInstanceOf[Any], e.asInstanceOf[Any])
     }
     job.waitUntil = System.currentTimeMillis() + intervalMS + (rng.nextInt(rangeMS) - (rangeMS >> 1))
     job.waiting = true
@@ -342,7 +350,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
     val existingJob = pings.get(job.target)
     if(existingJob == null) {
       log.trace("New job!")
-      val newJob = new State(job.target)
+      val newJob = new Job(job.target)
       if(job.onFailure.assignToJob(newJob.onFailures)) {
         pings.put(job.target, newJob)
         pingQueue.add(newJob)
@@ -380,7 +388,7 @@ object BlahPing extends App {
   }
 
   using(Executors.newCachedThreadPool()) { executor =>
-    using(new PingProvider(1.seconds, 1.second, 5, executor)) { pp =>
+    using(new PingProvider(1.second, 500.milliseconds, 5, executor)) { pp =>
       pp.start()
       val sem = new Semaphore(0)
       for(i <- 1 to 15) {
