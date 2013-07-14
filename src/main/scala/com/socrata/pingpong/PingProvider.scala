@@ -132,7 +132,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
 
     override def toString = "job for " + target + " (" + onFailures.size + " listener(s))"
 
-    waitUntil = 0L
+    waitUntil = System.currentTimeMillis()
 
     val socketAddress = new InetSocketAddress(target.host, target.port)
 
@@ -342,7 +342,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
       case e: IOException =>
         log.warn("Unexpected exception sending ping to {}; this will probably end up counting as missed.", job.target.asInstanceOf[Any], e.asInstanceOf[Any])
     }
-    job.waitUntil = System.currentTimeMillis() + intervalMS + (rng.nextInt(rangeMS) - (rangeMS >> 1))
+    job.waitUntil += intervalMS + (rng.nextInt(rangeMS) - (rangeMS >> 1))
     job.waiting = true
   }
 
