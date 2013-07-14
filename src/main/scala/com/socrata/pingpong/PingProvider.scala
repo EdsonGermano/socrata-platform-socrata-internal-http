@@ -227,9 +227,8 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
       }
       startJobs()
     } else {
-      val now = System.currentTimeMillis()
       val head = pingQueue.head
-      val timeout = head.waitUntil - now
+      val timeout = head.waitUntil - System.currentTimeMillis()
 
       try {
         if(timeout <= 0) {
@@ -249,7 +248,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
 
       startJobs()
       processPackets()
-      clearHeadOfQueue(now)
+      clearHeadOfQueue()
     }
   }
 
@@ -303,7 +302,8 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
     processPackets()
   }
 
-  private def clearHeadOfQueue(now: Long) {
+  private def clearHeadOfQueue() {
+    val now = System.currentTimeMillis()
     while(pingQueue.nonEmpty && pingQueue.head.waitUntil <= now) {
       val job = pingQueue.head
       if(!maybeDropJob(job)) {
