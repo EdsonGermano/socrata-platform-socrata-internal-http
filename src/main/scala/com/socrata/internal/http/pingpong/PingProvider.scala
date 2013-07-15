@@ -1,4 +1,4 @@
-package com.socrata.pingpong
+package com.socrata.internal.http.pingpong
 
 import scala.collection.JavaConverters._
 import java.io.{IOException, Closeable}
@@ -399,11 +399,11 @@ object BlahPing extends App {
   }
 
   using(Executors.newCachedThreadPool()) { executor =>
-    using(new InetPingProvider(1.second, 500.milliseconds, 5, executor)) { pp =>
+    using(new InetPingProvider(10.second, 5000.milliseconds, 5, executor)) { pp =>
       pp.start()
       val sem = new Semaphore(0)
-      for(i <- 1 to 15) {
-        pp.startPinging(new PingTarget(InetAddress.getByName("127.0.0." + (i % 3)), 12345, "hello".getBytes)) { println("Bad " + (i%3) + " :("); sem.release() }
+      for(i <- 1 to 254) {
+        pp.startPinging(new PingTarget(InetAddress.getByName("127.0.0." + i), 12345, "hello".getBytes)) { println("Bad " + i + " :("); sem.release() }
       }
       // pp.startPinging(new PingTarget(InetAddress.getByName("rojoma.com"), 12345, Array[Byte](0x41, 0x42, 0x43)), () => { println("Bad 2 :("); sem.release() })
       sem.acquire(10)

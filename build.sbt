@@ -1,5 +1,11 @@
 net.virtualvoid.sbt.graph.Plugin.graphSettings
 
+name := "socrata-internal-http"
+
+organization := "com.socrata"
+
+version := "0.0.1-SNAPSHOT"
+
 scalaVersion := "2.10.2"
 
 libraryDependencies ++= Seq(

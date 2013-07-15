@@ -1,4 +1,4 @@
-package com.socrata.pingpong
+package com.socrata.internal.http.pingpong
 
 import java.nio.channels.spi.SelectorProvider
 import java.nio.{BufferOverflowException, ByteBuffer}

@@ -1,4 +1,4 @@
-package com.socrata.pingpong
+package com.socrata.internal.http.pingpong
 
 import org.scalatest.FunSuite
 import org.scalatest.matchers.MustMatchers

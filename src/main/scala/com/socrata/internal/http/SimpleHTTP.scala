@@ -1,4 +1,4 @@
-package com.socrata.simplehttp
+package com.socrata.internal.http
 
 import java.io._
 import java.nio.charset.{UnsupportedCharsetException, IllegalCharsetNameException, Charset, StandardCharsets}
@@ -19,7 +19,7 @@ import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConne
 import org.apache.http.conn.ConnectTimeoutException
 import java.net.ConnectException
 import java.util.concurrent.{Executors, ExecutorService}
-import com.socrata.pingpong.{InetPingProvider, PingTarget, PingProvider}
+import com.socrata.internal.http.pingpong.{InetPingProvider, PingTarget, PingProvider}
 
 trait ResponseInfo {
   def resultCode: Int

@@ -1,4 +1,4 @@
-package com.socrata.pingpong
+package com.socrata.internal.http.pingpong
 
 import scala.annotation.tailrec
 

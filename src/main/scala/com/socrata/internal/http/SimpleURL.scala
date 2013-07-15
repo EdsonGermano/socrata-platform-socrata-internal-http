@@ -1,4 +1,4 @@
-package com.socrata.simplehttp
+package com.socrata.internal.http
 
 case class SimpleURL(scheme: String, host: String, port: Int, path: Iterable[String], query: Iterable[(String, String)] = Nil) {
   import SimpleURL._
