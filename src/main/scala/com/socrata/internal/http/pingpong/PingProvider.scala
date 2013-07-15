@@ -30,9 +30,9 @@ trait PingProvider {
   def startPinging(target: PingTarget)(onFailure: => Unit): Closeable
 }
 
-object NoopPingProvider extends PingProvider with Closeable {
-  def startPinging(target: PingTarget)(onFailure: => Unit): Closeable = this
-  def close() {}
+object NoopPingProvider extends PingProvider {
+  private val NoopCloseable = new Closeable { def close() {} }
+  def startPinging(target: PingTarget)(onFailure: => Unit): Closeable = NoopCloseable
 }
 
 class InetPingProvider(interval: FiniteDuration, range: FiniteDuration, missable: Int, executor: Executor, rng: Random = new Random) extends PingProvider with Closeable {
