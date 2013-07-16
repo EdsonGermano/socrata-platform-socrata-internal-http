@@ -285,30 +285,4 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     }
 }
 
-object Blah extends App {
-  import java.net._
-  import scala.concurrent.duration._
-  implicit object ExecutorServiceResource extends com.rojoma.simplearm.Resource[ExecutorService] {
-    def close(a: ExecutorService) { a.shutdown() }
-  }
 
-  val ping = new PingTarget(InetAddress.getLoopbackAddress, 12345, "hello".getBytes)
-  for {
-    executor <- managed(Executors.newCachedThreadPool())
-    pingProvider <- managed(new InetPingProvider(5.seconds, 1.second, 5, executor))
-    _ <- unmanaged(pingProvider.start())
-    cli <- managed[HttpClient](new HttpClientHttpClient(pingProvider, continueTimeout = None))
-    compressed <- managed(new FileInputStream("/home/robertm/car_linej_lds_5_2011.small.mjson.gz"))
-    uncompressed <- managed(new GZIPInputStream(compressed))
-    reader <- managed(new InputStreamReader(uncompressed, StandardCharsets.UTF_8))
-    resp <- cli.postJson(SimpleURL.http("localhost", port = 10000), Some(ping), new FusedBlockJsonEventIterator(reader))
-    /*
-    compressed <- managed(new FileInputStream("/home/robertm/tiny.gz"))
-    resp <- cli.postFile(SimpleURL.http("localhost", port = 10000), managed(new GZIPInputStream(compressed)))
-    */
-  } {
-    println(resp.responseInfo.resultCode)
-    EventTokenIterator(resp).map(_.asFragment).foreach(print)
-    println()
-  }
-}

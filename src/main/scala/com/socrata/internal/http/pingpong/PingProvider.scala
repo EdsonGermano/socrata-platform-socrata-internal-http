@@ -388,31 +388,6 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
   }
 }
 
-object BlahPing extends App {
-  import java.util.concurrent._
-  import scala.concurrent.duration._
-  import com.rojoma.simplearm.util._
-  import com.rojoma.simplearm.Resource
 
-  implicit object ExecutorServiceResource extends Resource[ExecutorService] {
-    def close(a: ExecutorService) { a.shutdown() }
-  }
 
-  using(Executors.newCachedThreadPool()) { executor =>
-    using(new InetPingProvider(10.second, 5000.milliseconds, 5, executor)) { pp =>
-      pp.start()
-      val sem = new Semaphore(0)
-      for(i <- 1 to 254) {
-        pp.startPinging(new PingTarget(InetAddress.getByName("127.0.0." + i), 12345, "hello".getBytes)) { println("Bad " + i + " :("); sem.release() }
-      }
-      // pp.startPinging(new PingTarget(InetAddress.getByName("rojoma.com"), 12345, Array[Byte](0x41, 0x42, 0x43)), () => { println("Bad 2 :("); sem.release() })
-      sem.acquire(10)
-      Thread.sleep(5000)
-    }
-  }
-}
 
-object BlahPong extends App {
-  val pong = new Pong(new InetSocketAddress(InetAddress.getLoopbackAddress, 12345), "hello".getBytes)
-  pong.go()
-}
