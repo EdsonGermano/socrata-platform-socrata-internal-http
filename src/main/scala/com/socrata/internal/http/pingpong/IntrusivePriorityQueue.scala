@@ -55,7 +55,7 @@ class IntrusivePriorityQueue[T <: IntrusivePriorityQueueNode] {
       val oldLast = nodes(endptr)
       nodes(idx) = oldLast
       oldLast.pq_idx = idx
-      reheap(idx, oldLast.priority)
+      heapDown(idx, oldLast.priority)
     }
     nodes(endptr) = null
     node.pq_queue = null
@@ -117,22 +117,23 @@ class IntrusivePriorityQueue[T <: IntrusivePriorityQueueNode] {
     val childIdxL = (idx << 1) + 1
     if(childIdxL < endptr) {
       val lPri = nodes(childIdxL).priority
-      val grandChildIdxR = childIdxL + 1
-      if(grandChildIdxR < endptr) {
-        val rPri = nodes(grandChildIdxR).priority
+      val childIdxR = childIdxL + 1
+      if(childIdxR < endptr) {
+        val rPri = nodes(childIdxR).priority
         if(lPri < rPri) {
           if(lPri < priority) {
             swap(idx, childIdxL)
             heapDown(childIdxL, priority)
           }
         } else if(rPri < priority) {
-          swap(idx, grandChildIdxR)
-          heapDown(grandChildIdxR, priority)
+          swap(idx, childIdxR)
+          heapDown(childIdxR, priority)
         }
       } else {
         if(lPri < priority) {
           swap(idx, childIdxL)
-          heapDown(childIdxL, priority)
+          // "idx" has no right child; therefore childIdx has no
+          // children at all and we're done.
         }
       }
     }
