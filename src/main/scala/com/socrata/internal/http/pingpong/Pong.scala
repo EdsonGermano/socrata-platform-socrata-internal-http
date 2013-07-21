@@ -4,13 +4,56 @@ import java.nio.channels.spi.SelectorProvider
 import java.nio.{BufferOverflowException, ByteBuffer}
 import scala.util.Random
 import com.rojoma.simplearm.util._
-import java.nio.channels.{ClosedByInterruptException, DatagramChannel}
-import java.net.{InetSocketAddress, SocketAddress}
-import java.io.IOException
+import java.nio.channels.ClosedByInterruptException
+import java.net.InetSocketAddress
+import java.io.{Closeable, IOException}
 import java.util.concurrent.CountDownLatch
+import java.nio.charset.StandardCharsets
+import scala.beans.BeanProperty
 
-class Pong(address: InetSocketAddress, send: Array[Byte], rng: Random = new Random) {
+// I love the way Java programmers think it's acceptable
+// to have objects in a partially-constructed state outside
+// of their own constructors.
+//
+// This exists for Jacksonification
+class PingInfo {
+  @BeanProperty
+  var port: Int = _
+
+  @BeanProperty
+  var response: String = _
+}
+
+object PingInfo {
+  def apply(port: Int, response: String) = {
+    val x = new PingInfo
+    x.port = port
+    x.response = response
+    x
+  }
+}
+
+class Pong(address: InetSocketAddress, rng: Random = new Random) extends Closeable {
+  private val sendString = {
+    val alphanum = (('a' to 'z') ++ ('A' to 'Z') ++ ('0' to '9')).mkString
+    val sb = new StringBuilder
+    for(_ <- 1 to 16) sb.append(alphanum(rng.nextInt(alphanum.length)))
+    sb.toString
+  }
+  private val sendBytes = sendString.getBytes(StandardCharsets.ISO_8859_1)
   private val log = org.slf4j.LoggerFactory.getLogger(classOf[Pong])
+
+  private val started = new CountDownLatch(1)
+  @volatile private var port = 0
+  @volatile private var problem: Throwable = null
+  private var _pingInfo: PingInfo = null
+
+  private val thread = new Thread() {
+    setName(getId + " / Ping responder")
+    override def run() {
+      mainloop()
+    }
+  }
 
   // runs the mainloop, responding to every ping packet it receives.
   //
@@ -18,7 +61,7 @@ class Pong(address: InetSocketAddress, send: Array[Byte], rng: Random = new Rand
   //   [the contents of the received ping] [the contents of `send`]
   //
   // At any time, this thread may be interrupted.  This will cause it to exit.
-  def go() {
+  private def mainloop() {
     try {
       val selectorProvider = SelectorProvider.provider
       using(selectorProvider.openDatagramChannel()) { socket =>
@@ -33,7 +76,7 @@ class Pong(address: InetSocketAddress, send: Array[Byte], rng: Random = new Rand
           val respondTo = socket.receive(recvBuf)
           try {
             log.trace("Ping from {}", respondTo)
-            recvBuf.put(send).flip()
+            recvBuf.put(sendBytes).flip()
             socket.send(recvBuf, respondTo)
             log.trace("Pong!")
           } catch {
@@ -50,17 +93,26 @@ class Pong(address: InetSocketAddress, send: Array[Byte], rng: Random = new Rand
       case e: Throwable =>
         problem = e
         started.countDown()
+        log.error("Unexpected exception on pong thread", e)
         throw e
     }
   }
 
-  private val started = new CountDownLatch(1)
-  @volatile private var port = 0
-  @volatile private var problem: Throwable = null
-
-  def awaitStart(): Int = {
+  def start() {
+    if(_pingInfo != null) throw new IllegalStateException("Already started")
+    thread.start()
     started.await()
     if(problem != null) throw new Exception("Exception on pong thread", problem)
-    port
+    _pingInfo = PingInfo(port, sendString)
+  }
+
+  def pingInfo = {
+    if(_pingInfo == null) throw new IllegalStateException("not yet started")
+    _pingInfo
+  }
+
+  def close() {
+    thread.interrupt()
+    thread.join()
   }
 }
