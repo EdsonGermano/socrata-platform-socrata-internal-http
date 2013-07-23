@@ -40,7 +40,7 @@ class Pong(address: InetSocketAddress, rng: Random = new Random) extends Closeab
     for(_ <- 1 to 16) sb.append(alphanum(rng.nextInt(alphanum.length)))
     sb.toString
   }
-  private val sendBytes = sendString.getBytes(StandardCharsets.ISO_8859_1)
+  private val sendBytes = sendString.getBytes(StandardCharsets.UTF_8)
   private val log = org.slf4j.LoggerFactory.getLogger(classOf[Pong])
 
   private val started = new CountDownLatch(1)

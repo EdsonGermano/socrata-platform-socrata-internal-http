@@ -11,19 +11,24 @@ import java.nio.ByteBuffer
 import scala.annotation.tailrec
 import scala.util.Random
 import java.nio.channels.SelectionKey
+import java.nio.charset.StandardCharsets
 
 // Note: "response" must not be mutated after being passed to this
-final class PingTarget(val host: InetAddress, val port: Int, val response: Array[Byte]) {
+final class PingTarget private[pingpong] (private [pingpong] val host: InetAddress, private [pingpong] val port: Int, private val response: Array[Byte]) {
+  def this(host: InetAddress, port: Int, response: String) = this(host, port, response.getBytes(StandardCharsets.UTF_8))
+
   private val address = host.getAddress
+
   override val hashCode = MurmurHash3.bytesHash(response, MurmurHash3.bytesHash(address, port))
+
   override def equals(o: Any) = o match {
     case that: PingTarget =>
-      java.util.Arrays.equals(this.address, that.address) && this.port == that.port && java.util.Arrays.equals(this.response, that.response)
+      java.util.Arrays.equals(this.address, that.address) && this.port == that.port && this.response == that.response
     case _ => false
   }
-  override def toString = {
-    "PingTarget(" + host + ", " + port + ", " + java.util.Arrays.toString(response) + ")"
-  }
+
+  override def toString =
+    "PingTarget(" + host + ", " + port + ", " + response + ")"
 }
 
 trait PingProvider {
