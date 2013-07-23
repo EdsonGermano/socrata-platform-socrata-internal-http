@@ -11,26 +11,9 @@ import java.util.concurrent.CountDownLatch
 import java.nio.charset.StandardCharsets
 import scala.beans.BeanProperty
 
-// I love the way Java programmers think it's acceptable
-// to have objects in a partially-constructed state outside
-// of their own constructors.
-//
-// This exists for Jacksonification
-class PingInfo {
-  @BeanProperty
-  var port: Int = _
-
-  @BeanProperty
-  var response: String = _
-}
-
-object PingInfo {
-  def apply(port: Int, response: String) = {
-    val x = new PingInfo
-    x.port = port
-    x.response = response
-    x
-  }
+class PingInfo(@BeanProperty var port: Int, @BeanProperty var response: String) {
+  @deprecated(message = "This constructor is for Jackson's use, not yours", since = "forever")
+  def this() = this(0, null)
 }
 
 class Pong(address: InetSocketAddress, rng: Random = new Random) extends Closeable {
@@ -103,7 +86,7 @@ class Pong(address: InetSocketAddress, rng: Random = new Random) extends Closeab
     thread.start()
     started.await()
     if(problem != null) throw new Exception("Exception on pong thread", problem)
-    _pingInfo = PingInfo(port, sendString)
+    _pingInfo = new PingInfo(port, sendString)
   }
 
   def pingInfo = {
