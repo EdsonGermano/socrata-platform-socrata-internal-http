@@ -68,8 +68,7 @@ class SimpleHttpRequestBuilder private (val host: String,
 
   /**
    * @note This does ''not'' take ownership of the input stream.  It must remain open for the
-   *       duration of the HTTP request.  It will be closed after the request is fully sent, but
-   *       calling code must ensure that it is always closed.
+   *       duration of the HTTP request.
    */
   def file(contents: InputStream, file: String = "file", field: String = "file", contentType: String = "application/octet-stream") =
     new FileHttpRequest(this.finish("POST"), contents, file, field, contentType)
