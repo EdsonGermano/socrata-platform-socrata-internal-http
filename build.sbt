@@ -17,7 +17,7 @@ libraryDependencies ++= Seq(
   "org.scalacheck" %% "scalacheck" % "1.10.1" % "test",
   "org.slf4j" % "jcl-over-slf4j" % "1.7.5",
   "org.slf4j" % "slf4j-api" % "1.7.5",
-  "org.slf4j" % "slf4j-simple" % "1.7.5"
+  "org.slf4j" % "slf4j-simple" % "1.7.5" % "test"
 )
 
 scalacOptions += "-feature"
