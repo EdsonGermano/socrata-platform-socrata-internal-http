@@ -16,7 +16,7 @@ import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
 import org.apache.http.conn.ConnectTimeoutException
 import java.net.{SocketTimeoutException, URI, InetAddress, ConnectException}
-import com.socrata.internal.http.pingpong.{NoopPingProvider, PingInfo, PingTarget, PingProvider}
+import com.socrata.internal.http.pingpong.{PingInfo, PingTarget, PingProvider}
 
 trait ResponseInfo {
   def resultCode: Int
@@ -239,7 +239,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
   }
 
   def setupOp(req: SimpleHttpRequest, op: HttpRequestBase) {
-    for((k, v) <- req.builder.headers) op.setHeader(k, v)
+    for((k, v) <- req.builder.headers) op.addHeader(k, v)
     val params = op.getParams
     req.builder.connectTimeoutMS.foreach { ms =>
       HttpConnectionParams.setConnectionTimeout(params, ms)

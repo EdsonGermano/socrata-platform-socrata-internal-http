@@ -4,17 +4,12 @@ import java.io.InputStream
 
 import com.rojoma.json.io.JsonEvent
 
-// In keeping with the goal of "simple", this builder has some limitations on
-// what it can build.  In particular:
-//  * Query parameters are all ampersand-separated key=value pairs with no
-//    duplicate keys (last one always wins)
-//  * No duplicate headers can be set (last one always wins)
 class SimpleHttpRequestBuilder private (val host: String,
                                         val secure: Boolean,
                                         val port: Int,
                                         val path: Iterable[String],
-                                        val query: Map[String, String],
-                                        val headers: Map[String, String],
+                                        val query: Iterable[(String, String)],
+                                        val headers: Iterable[(String, String)],
                                         val method: Option[String],
                                         val connectTimeoutMS: Option[Int],
                                         val receiveTimeoutMS: Option[Int]) {
@@ -22,8 +17,8 @@ class SimpleHttpRequestBuilder private (val host: String,
            secure: Boolean = this.secure,
            port: Int = this.port,
            path: Iterable[String] = this.path,
-           query: Map[String, String] = this.query,
-           headers: Map[String, String] = this.headers,
+           query: Iterable[(String, String)] = this.query,
+           headers: Iterable[(String, String)] = this.headers,
            method: Option[String] = this.method,
            connectTimeoutMS: Option[Int] = this.connectTimeoutMS,
            receiveTimeoutMS: Option[Int] = this.receiveTimeoutMS) =
@@ -35,17 +30,17 @@ class SimpleHttpRequestBuilder private (val host: String,
 
   def p(newPath: String*) = copy(path = newPath)
 
-  def query(newQuery: Iterable[(String, String)]) = copy(query = newQuery.toMap)
+  def query(newQuery: Iterable[(String, String)]) = copy(query = newQuery)
 
-  def q(newQuery: (String, String)*) = copy(query = newQuery.toMap)
+  def q(newQuery: (String, String)*) = copy(query = newQuery)
 
-  def addParameter(parameter: (String, String)) = copy(query = query + parameter)
+  def addParameter(parameter: (String, String)) = copy(query = query.toVector :+ parameter)
 
-  def headers(newHeaders: Iterable[(String, String)]) = copy(headers = newHeaders.toMap)
+  def headers(newHeaders: Iterable[(String, String)]) = copy(headers = newHeaders)
 
-  def h(newHeaders: (String, String)*) = copy(headers = newHeaders.toMap)
+  def h(newHeaders: (String, String)*) = copy(headers = newHeaders)
 
-  def addHeader(header: (String, String)) = copy(headers = headers + header)
+  def addHeader(header: (String, String)) = copy(headers = headers.toVector :+ header)
 
   def method(newMethod: String) = copy(method = Some(newMethod))
 
@@ -66,7 +61,7 @@ class SimpleHttpRequestBuilder private (val host: String,
   def delete = new BodylessHttpRequest(this.finish("DELETE"))
 
   def form(contents: Iterable[(String, String)]) =
-    new FormHttpRequest(this.finish("POST"), contents.toMap)
+    new FormHttpRequest(this.finish("POST"), contents)
 
   /**
    * @note This does ''not'' take ownership of the input stream.  It must remain open for the
@@ -86,7 +81,7 @@ class SimpleHttpRequestBuilder private (val host: String,
 
 object SimpleHttpRequestBuilder {
   def apply(host: String, secure: Boolean = false) =
-    new SimpleHttpRequestBuilder(host, secure, if(secure) 443 else 80, Nil, Map.empty, Map.empty, None, None, None)
+    new SimpleHttpRequestBuilder(host, secure, if(secure) 443 else 80, Nil, Vector.empty, Vector.empty, None, None, None)
 
   private[this] val hexDigit = "0123456789ABCDEF".toCharArray
   private[this] val encPB = locally {
@@ -174,6 +169,6 @@ sealed trait SimpleHttpRequest {
   val builder: SimpleHttpRequestBuilder
 }
 class BodylessHttpRequest(val builder: SimpleHttpRequestBuilder) extends SimpleHttpRequest
-class FormHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: Map[String, String]) extends SimpleHttpRequest
+class FormHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: Iterable[(String, String)]) extends SimpleHttpRequest
 class FileHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: InputStream, val file: String, val field: String, val contentType: String) extends SimpleHttpRequest
 class JsonHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: Iterator[JsonEvent]) extends SimpleHttpRequest
