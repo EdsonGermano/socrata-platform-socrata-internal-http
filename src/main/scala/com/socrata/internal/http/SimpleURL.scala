@@ -63,6 +63,8 @@ class SimpleHttpRequestBuilder private (val host: String,
 
   def get = new BodylessHttpRequest(this.finish("GET"))
 
+  def delete = new BodylessHttpRequest(this.finish("DELETE"))
+
   def form(contents: Iterable[(String, String)]) =
     new FormHttpRequest(this.finish("POST"), contents.toMap)
 
