@@ -8,8 +8,6 @@ import org.apache.http.entity._
 import com.rojoma.simplearm._
 import com.rojoma.simplearm.util._
 import com.rojoma.json.io._
-import com.rojoma.json.codec.JsonCodec
-import java.util.zip.GZIPInputStream
 import javax.activation.{MimeTypeParseException, MimeType}
 import java.lang.reflect.UndeclaredThrowableException
 import org.apache.http.entity.mime.MultipartEntity
@@ -17,9 +15,8 @@ import org.apache.http.entity.mime.content.InputStreamBody
 import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
 import org.apache.http.conn.ConnectTimeoutException
-import java.net.{URI, InetAddress, ConnectException}
-import java.util.concurrent.{Executors, ExecutorService}
-import com.socrata.internal.http.pingpong.{PingInfo, InetPingProvider, PingTarget, PingProvider}
+import java.net.{SocketTimeoutException, URI, InetAddress, ConnectException}
+import com.socrata.internal.http.pingpong.{NoopPingProvider, PingInfo, PingTarget, PingProvider}
 
 trait ResponseInfo {
   def resultCode: Int
@@ -33,8 +30,8 @@ trait ResponseInfoProvider {
 
 class HttpClientException extends Exception
 class ConnectTimeout extends HttpClientException
-class ConnectFailed extends HttpClientException // failed for not-timeout reasons
 class ReceiveTimeout extends HttpClientException
+class ConnectFailed extends HttpClientException // failed for not-timeout reasons
 class NoBodyInResponse extends HttpClientException
 
 class ContentTypeException extends HttpClientException
@@ -48,10 +45,12 @@ class UnsupportedCharset(val charsetName: String) extends ContentTypeException
 trait HttpClient extends Closeable {
   import HttpClient._
 
-  type Response = Iterator[JsonEvent] with ResponseInfoProvider
-  type RawResponse = InputStream with ResponseInfoProvider
+  type RawResponse = InputStream with Acknowledgeable with ResponseInfoProvider
+  type RawJsonResponse = Reader with Acknowledgeable with ResponseInfoProvider
+  type JsonResponse = Iterator[JsonEvent] with Acknowledgeable with ResponseInfoProvider
 
   protected def connectTimeout() = throw new ConnectTimeout
+  protected def receiveTimeout() = throw new ReceiveTimeout
   protected def connectFailed() = throw new ConnectFailed
   protected def noContentTypeInResponse() = throw new NoContentTypeInResponse
   protected def multipleContentTypesInResponse() = throw new MultipleContentTypesInResponse
@@ -61,7 +60,7 @@ trait HttpClient extends Closeable {
   protected def unsupportedCharset(charsetName: String) = throw new UnsupportedCharset(charsetName)
   protected def noBodyInResponse() = throw new NoBodyInResponse
 
-  protected def charsetFor(responseInfo: ResponseInfo): Charset = responseInfo.headers("content-type") match {
+  private def charsetForJson(responseInfo: ResponseInfo): Charset = responseInfo.headers("content-type") match {
     case Array(ct) =>
       try {
         val mimeType = new MimeType(ct)
@@ -81,21 +80,50 @@ trait HttpClient extends Closeable {
       multipleContentTypesInResponse()
   }
 
-  private def jsonify(response: Managed[RawResponse]): Managed[Response] = new SimpleArm[Response] {
-    def flatMap[A](f: Response => A): A = {
-      for(raw <- response) yield {
-        val reader = new InputStreamReader(raw, charsetFor(raw.responseInfo))
-        val processed: Iterator[JsonEvent] with ResponseInfoProvider =
-          new FusedBlockJsonEventIterator(reader) with ResponseInfoProvider {
-            val responseInfo = raw.responseInfo
-          }
-        f(processed)
+  /**
+   * Executes the request.
+   *
+   * @return an `InputStream` with attached HTTP response info.
+   */
+  def execute(req: SimpleHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long = Long.MaxValue): Managed[RawResponse]
+
+  /**
+   * Executes the request, checking that the response headers declare the content to be JSON.
+   *
+   * @return an [[com.socrata.internal.http.Acknowledgeable]] `Reader` with attached HTTP response info.
+   */
+  def executeExpectingJson(req: SimpleHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long = Long.MaxValue): Managed[RawJsonResponse] =
+    new SimpleArm[RawJsonResponse] {
+      def flatMap[A](f: RawJsonResponse => A): A = {
+        for(raw <- execute(req, ping, maximumSizeBetweenAcks)) yield {
+          val reader: Reader with Acknowledgeable with ResponseInfoProvider =
+            new InputStreamReader(raw, charsetForJson(raw.responseInfo)) with Acknowledgeable with ResponseInfoProvider {
+              val responseInfo = raw.responseInfo
+              def acknowledge() = raw.acknowledge()
+            }
+          f(reader)
+        }
       }
     }
-  }
 
-  def processRaw(req: SimpleHttpRequest, ping: Option[PingInfo]): Managed[RawResponse]
-  def process(req: SimpleHttpRequest, ping: Option[PingInfo]) = jsonify(processRaw(req, ping))
+  /**
+   * Executes the request, checking that the response contains JSON.
+   *
+   * @return an [[com.socrata.internal.http.Acknowledgeable]] `Iterator[JsonEvent]` with attached HTTP response info.
+   */
+  def executeForJson(req: SimpleHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long = Long.MaxValue): Managed[JsonResponse] =
+    new SimpleArm[JsonResponse] {
+      def flatMap[A](f: JsonResponse => A): A = {
+        for(raw <- executeExpectingJson(req, ping, maximumSizeBetweenAcks)) yield {
+          val processed: Iterator[JsonEvent] with Acknowledgeable with ResponseInfoProvider =
+            new FusedBlockJsonEventIterator(raw) with Acknowledgeable with ResponseInfoProvider {
+              val responseInfo = raw.responseInfo
+              def acknowledge() = raw.acknowledge()
+            }
+          f(processed)
+        }
+      }
+    }
 }
 
 object HttpClient {
@@ -147,7 +175,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     httpclient.getConnectionManager.shutdown()
   }
 
-  private def send[A](req: HttpUriRequest, pingTarget: Option[PingTarget], f: RawResponse => A): A = {
+  private def send[A](req: HttpUriRequest, pingTarget: Option[PingTarget], maximumSizeBetweenAcks: Long, f: RawResponse => A): A = {
     for {
       _ <- managed {
         pingTarget match {
@@ -165,14 +193,16 @@ class HttpClientHttpClient(pingProvider: PingProvider,
           connectFailed()
         case e: UndeclaredThrowableException =>
           throw e.getCause
+        case _: SocketTimeoutException =>
+          receiveTimeout()
       }
 
       val entity = response.getEntity
       if(entity != null) {
-        val content = entity.getContent
+        val content = entity.getContent()
         try {
-          val processed: InputStream with ResponseInfoProvider =
-            new FilterInputStream(content) with ResponseInfoProvider with ResponseInfo {
+          val processed: InputStream with Acknowledgeable with ResponseInfoProvider =
+            new AcknowledgeableInputStream(new ReceiveTimeoutCatchingInputStream(content, receiveTimeout), maximumSizeBetweenAcks) with ResponseInfoProvider with ResponseInfo {
               def responseInfo = this
               val resultCode = response.getStatusLine.getStatusCode
 
@@ -195,12 +225,12 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     }
   }
 
-  def processRaw(req: SimpleHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] =
+  def execute(req: SimpleHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] =
     req match {
-      case bodyless: BodylessHttpRequest => processBodyless(bodyless, ping)
-      case form: FormHttpRequest => processForm(form, ping)
-      case file: FileHttpRequest => processFile(file, ping)
-      case json: JsonHttpRequest => processJson(json, ping)
+      case bodyless: BodylessHttpRequest => processBodyless(bodyless, ping, maximumSizeBetweenAcks)
+      case form: FormHttpRequest => processForm(form, ping, maximumSizeBetweenAcks)
+      case file: FileHttpRequest => processFile(file, ping, maximumSizeBetweenAcks)
+      case json: JsonHttpRequest => processJson(json, ping, maximumSizeBetweenAcks)
     }
 
   def pingTarget(req: SimpleHttpRequest, ping: Option[PingInfo]): Option[PingTarget] = ping match {
@@ -243,46 +273,44 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       throw new IllegalArgumentException("No method in request")
   }
 
-  def processBodyless(req: BodylessHttpRequest, ping: Option[PingInfo]) = new SimpleArm[RawResponse] {
+  def processBodyless(req: BodylessHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long) = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val op = bodylessOp(req)
-      send(op, pingTarget(req, ping), f)
+      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 
-  def processForm(req: FormHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processForm(req: FormHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new FormReader(req.contents), StandardCharsets.UTF_8), -1, formContentType)
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, pingTarget(req, ping), f)
+      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 
-  def processFile(req: FileHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processFile(req: FileHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new MultipartEntity
       sendEntity.addPart(req.field, new InputStreamBody(req.contents, req.contentType, req.file))
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, pingTarget(req, ping), f)
+      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 
-  def processJson(req: JsonHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processJson(req: JsonHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(req.contents), StandardCharsets.UTF_8), -1, jsonContentType)
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, pingTarget(req, ping), f)
+      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 }
-
-
