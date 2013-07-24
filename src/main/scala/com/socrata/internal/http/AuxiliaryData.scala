@@ -10,5 +10,5 @@ class AuxiliaryData(var pingInfo: Option[PingInfo]) {
 
   // can't use @BeanProperty because of the Option
   def getPingInfo = pingInfo.orNull
-  def setPingTarget(pt: PingInfo) { pingInfo = Option(pt) }
+  def setPingInfo(pi: PingInfo) { pingInfo = Option(pi) }
 }
