@@ -17,6 +17,7 @@ import java.net._
 import com.socrata.internal.http.pingpong._
 import java.util.concurrent.Executor
 import com.socrata.internal.http.util._
+import javax.net.ssl.SSLException
 
 class HttpClientHttpClient(pingProvider: PingProvider,
                            executor: Executor,
@@ -102,7 +103,11 @@ class HttpClientHttpClient(pingProvider: PingProvider,
           throw e.getCause
         case e: SocketException if e.getMessage == "Socket closed" =>
           probablyAborted(e)
+        case e: InterruptedIOException if e.getMessage == "Connection already shutdown" =>
+          probablyAborted(e)
         case e: IOException if e.getMessage == "Request already aborted" =>
+          probablyAborted(e)
+        case e: SSLException =>
           probablyAborted(e)
         case _: SocketTimeoutException =>
           receiveTimeout()
@@ -114,6 +119,10 @@ class HttpClientHttpClient(pingProvider: PingProvider,
         try {
           val catchingInputStream = CatchingInputStream(content) {
             case e: SocketException if e.getMessage == "Socket closed" =>
+              probablyAborted(e)
+            case e: InterruptedIOException if e.getMessage == "Connection already shutdown" =>
+              probablyAborted(e)
+            case e: SSLException =>
               probablyAborted(e)
             case e: java.net.SocketTimeoutException =>
               receiveTimeout()
