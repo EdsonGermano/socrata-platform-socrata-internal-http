@@ -19,11 +19,16 @@ class TimeoutManager(executor: Executor) extends Closeable {
 
   private val worker = new Thread {
     override def run() {
-      mainloop()
+      try {
+        mainloop()
+      } catch {
+        case e: Throwable =>
+          log.error("Unexpected exception", e)
+          throw e
+      }
     }
   }
   private val pendingJobs = new java.util.concurrent.LinkedBlockingQueue[PendingJob]
-  private val jobs = new IntrusivePriorityQueue[Job]
 
   def start() {
     worker.start()
@@ -35,35 +40,32 @@ class TimeoutManager(executor: Executor) extends Closeable {
   }
 
   private def mainloop() {
+    val jobs = new IntrusivePriorityQueue[Job]
+
     while(true) {
       val now = System.currentTimeMillis()
 
       while(jobs.nonEmpty && jobs.head.deadline <= now) runJob(jobs.pop())
 
       val newJobs = new java.util.ArrayList[PendingJob]
-      if(jobs.nonEmpty) {
-        pendingJobs.drainTo(newJobs)
-        if(newJobs.isEmpty) {
+      pendingJobs.drainTo(newJobs)
+      if(newJobs.isEmpty) {
+        if(jobs.isEmpty) {
+          newJobs.add(pendingJobs.take())
+        } else {
           val job = pendingJobs.poll(jobs.head.deadline - now, TimeUnit.MILLISECONDS)
-          if(job != null) pendingJobs.add(job)
-        }
-      } else {
-        pendingJobs.drainTo(newJobs)
-        if(newJobs.isEmpty) {
-          pendingJobs.add(pendingJobs.take())
+          if(job != null) newJobs.add(job)
         }
       }
 
       newJobs.asScala.foreach {
-        case j: Job =>
-          jobs.add(j)
+        case job: Job =>
+          jobs.add(job)
         case CancelJob(job) =>
           jobs.remove(job)
         case PoisonPill =>
           if(jobs.nonEmpty) log.warn("Shutting down with " + jobs.size + " timeout jobs remaining")
           return
-        case null => // timed out while waiting for the front job
-          runJob(jobs.pop())
       }
     }
   }
