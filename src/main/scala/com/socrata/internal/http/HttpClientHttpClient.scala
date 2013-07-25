@@ -17,21 +17,6 @@ import java.net._
 import com.socrata.internal.http.pingpong._
 import java.util.concurrent.Executors
 import com.socrata.internal.http.util._
-import scala.Some
-
-trait ResponseInfo {
-  def resultCode: Int
-  def headers(name: String): Array[String] // this will return an empty array if the header does not exist
-  def headerNames: Set[String]
-}
-
-trait ResponseInfoProvider {
-  def responseInfo: ResponseInfo
-}
-
-object NoopCloseable extends Closeable {
-  def close() {}
-}
 
 class HttpClientHttpClient(pingProvider: PingProvider,
                            continueTimeout: Option[Int] = Some(3000),
@@ -140,7 +125,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
               // I am *fairly* sure (from code-diving) that the value field of a header
               // parsed from a response will never be null.
               def headers(name: String) = response.getHeaders(name).map(_.getValue)
-              def headerNames = response.getAllHeaders.iterator.map(_.getName).toSet
+              lazy val headerNames = response.getAllHeaders.iterator.map(_.getName.toLowerCase).toSet
             }
           f(processed)
         } catch {
@@ -242,15 +227,6 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
       send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
-    }
-  }
-}
-
-object TimeoutTest extends App {
-  using(new HttpClientHttpClient(NoopPingProvider)) { cli =>
-    val req = RequestBuilder("localhost").port(6060).timeoutMS(Some(5000)).get
-    for(x <- cli.execute(req, None)) {
-      println(x.responseInfo.resultCode)
     }
   }
 }
