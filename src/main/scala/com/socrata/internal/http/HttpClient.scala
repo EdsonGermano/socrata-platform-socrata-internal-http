@@ -4,13 +4,15 @@ import java.io.{InputStreamReader, Reader, InputStream, Closeable}
 import java.nio.charset.{UnsupportedCharsetException, IllegalCharsetNameException, StandardCharsets, Charset}
 import javax.activation.{MimeTypeParseException, MimeType}
 
-import com.rojoma.json.io.{FusedBlockJsonEventIterator, JsonEvent}
+import com.rojoma.json.io.{JsonReader, FusedBlockJsonEventIterator, JsonEvent}
 import com.rojoma.simplearm.{SimpleArm, Managed}
 import org.apache.http.entity.ContentType
 
 import com.socrata.internal.http.util.Acknowledgeable
 import com.socrata.internal.http.exceptions._
 import com.socrata.internal.http.pingpong.PingInfo
+import com.rojoma.json.ast.JValue
+import com.rojoma.json.codec.JsonCodec
 
 trait HttpClient extends Closeable {
   import HttpClient._
@@ -96,6 +98,15 @@ trait HttpClient extends Closeable {
         }
       }
     }
+
+  def executeForJValue(req: SimpleHttpRequest, ping: Option[PingInfo], approximateMaximumSize: Long = Long.MaxValue): (ResponseInfo, JValue) =
+    for(response <- executeForJson(req, ping, maximumSizeBetweenAcks = approximateMaximumSize)) yield
+      (response.responseInfo, JsonReader.fromEvents(response))
+
+  def executeForJsonable[T : JsonCodec](req: SimpleHttpRequest, ping: Option[PingInfo], approximateMaximumSize: Long = Long.MaxValue): (ResponseInfo, Option[T]) = {
+    val (info, jvalue) = executeForJValue(req, ping, approximateMaximumSize)
+    (info, JsonCodec[T].decode(jvalue))
+  }
 }
 
 object HttpClient {
