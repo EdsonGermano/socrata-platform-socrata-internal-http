@@ -15,10 +15,11 @@ import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConne
 import org.apache.http.conn.ConnectTimeoutException
 import java.net._
 import com.socrata.internal.http.pingpong._
-import java.util.concurrent.Executors
+import java.util.concurrent.Executor
 import com.socrata.internal.http.util._
 
 class HttpClientHttpClient(pingProvider: PingProvider,
+                           executor: Executor,
                            continueTimeout: Option[Int] = Some(3000),
                            userAgent: String = "HttpClientHttpClient")
   extends HttpClient
@@ -33,7 +34,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
   }
   @volatile private[this] var initialized = false
   private val log = org.slf4j.LoggerFactory.getLogger(classOf[HttpClientHttpClient])
-  private val timeoutManager = new TimeoutManager(Executors.newSingleThreadExecutor)
+  private val timeoutManager = new TimeoutManager(executor)
 
   private def init() {
     def reallyInit() = synchronized {
