@@ -4,16 +4,16 @@ import java.io.InputStream
 
 import com.rojoma.json.io.JsonEvent
 
-class SimpleHttpRequestBuilder private (val host: String,
-                                        val secure: Boolean,
-                                        val port: Int,
-                                        val path: Iterable[String],
-                                        val query: Iterable[(String, String)],
-                                        val headers: Iterable[(String, String)],
-                                        val method: Option[String],
-                                        val connectTimeoutMS: Option[Int],
-                                        val receiveTimeoutMS: Option[Int],
-                                        val timeoutMS: Option[Int]) {
+class RequestBuilder private (val host: String,
+                              val secure: Boolean,
+                              val port: Int,
+                              val path: Iterable[String],
+                              val query: Iterable[(String, String)],
+                              val headers: Iterable[(String, String)],
+                              val method: Option[String],
+                              val connectTimeoutMS: Option[Int],
+                              val receiveTimeoutMS: Option[Int],
+                              val timeoutMS: Option[Int]) {
   def copy(host: String = this.host,
            secure: Boolean = this.secure,
            port: Int = this.port,
@@ -24,7 +24,7 @@ class SimpleHttpRequestBuilder private (val host: String,
            connectTimeoutMS: Option[Int] = this.connectTimeoutMS,
            receiveTimeoutMS: Option[Int] = this.receiveTimeoutMS,
            timeoutMS: Option[Int] = this.timeoutMS) =
-    new SimpleHttpRequestBuilder(host, secure, port, path, query, headers, method, connectTimeoutMS, receiveTimeoutMS, timeoutMS)
+    new RequestBuilder(host, secure, port, path, query, headers, method, connectTimeoutMS, receiveTimeoutMS, timeoutMS)
 
   def port(newPort: Int) = copy(port = newPort)
 
@@ -82,12 +82,12 @@ class SimpleHttpRequestBuilder private (val host: String,
   def json(contents: Iterator[JsonEvent]) =
     new JsonHttpRequest(this.finish("POST"), contents)
 
-  def url = SimpleHttpRequestBuilder.url(this)
+  def url = RequestBuilder.url(this)
 }
 
-object SimpleHttpRequestBuilder {
+object RequestBuilder {
   def apply(host: String, secure: Boolean = false) =
-    new SimpleHttpRequestBuilder(host, secure, if(secure) 443 else 80, Nil, Vector.empty, Vector.empty, None, None, None, None)
+    new RequestBuilder(host, secure, if(secure) 443 else 80, Nil, Vector.empty, Vector.empty, None, None, None, None)
 
   private[this] val hexDigit = "0123456789ABCDEF".toCharArray
   private[this] val encPB = locally {
@@ -127,7 +127,7 @@ object SimpleHttpRequestBuilder {
   private def encQ(sb: java.lang.StringBuilder, s: String) =
     enc(sb, s, encQB)
 
-  private def url(req: SimpleHttpRequestBuilder): String = {
+  private def url(req: RequestBuilder): String = {
     val sb = new java.lang.StringBuilder
 
     import req._
@@ -172,9 +172,9 @@ object SimpleHttpRequestBuilder {
 }
 
 sealed trait SimpleHttpRequest {
-  val builder: SimpleHttpRequestBuilder
+  val builder: RequestBuilder
 }
-class BodylessHttpRequest(val builder: SimpleHttpRequestBuilder) extends SimpleHttpRequest
-class FormHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: Iterable[(String, String)]) extends SimpleHttpRequest
-class FileHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: InputStream, val file: String, val field: String, val contentType: String) extends SimpleHttpRequest
-class JsonHttpRequest(val builder: SimpleHttpRequestBuilder, val contents: Iterator[JsonEvent]) extends SimpleHttpRequest
+class BodylessHttpRequest(val builder: RequestBuilder) extends SimpleHttpRequest
+class FormHttpRequest(val builder: RequestBuilder, val contents: Iterable[(String, String)]) extends SimpleHttpRequest
+class FileHttpRequest(val builder: RequestBuilder, val contents: InputStream, val file: String, val field: String, val contentType: String) extends SimpleHttpRequest
+class JsonHttpRequest(val builder: RequestBuilder, val contents: Iterator[JsonEvent]) extends SimpleHttpRequest

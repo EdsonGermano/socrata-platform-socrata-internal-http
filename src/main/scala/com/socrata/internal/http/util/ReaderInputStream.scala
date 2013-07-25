@@ -1,4 +1,4 @@
-package com.socrata.internal.http
+package com.socrata.internal.http.util
 
 import java.io._
 import java.nio.charset.{CodingErrorAction, Charset, CoderResult}

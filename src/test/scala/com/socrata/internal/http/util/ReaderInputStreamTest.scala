@@ -1,4 +1,4 @@
-package com.socrata.internal.http
+package com.socrata.internal.http.util
 
 import scala.collection.JavaConverters._
 import org.scalatest.FunSuite

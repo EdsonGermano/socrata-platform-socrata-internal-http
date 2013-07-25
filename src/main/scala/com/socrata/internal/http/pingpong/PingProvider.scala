@@ -12,6 +12,7 @@ import scala.annotation.tailrec
 import scala.util.Random
 import java.nio.channels.SelectionKey
 import java.nio.charset.StandardCharsets
+import com.socrata.internal.http.util.{IntrusivePriorityQueue, IntrusivePriorityQueueNode}
 
 // Note: "response" must not be mutated after being passed to this
 final class PingTarget private[pingpong] (private [pingpong] val host: InetAddress, private [pingpong] val port: Int, private val response: Array[Byte]) {

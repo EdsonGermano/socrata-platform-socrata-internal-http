@@ -1,4 +1,4 @@
-package com.socrata.internal.http
+package com.socrata.internal.http.util
 
 import java.io.InputStream
 
@@ -38,4 +38,3 @@ object CatchingInputStream {
   def apply(underlying: InputStream)(onException: PartialFunction[Throwable, Nothing]) =
     new CatchingInputStream(underlying, onException)
 }
-

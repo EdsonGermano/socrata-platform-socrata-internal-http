@@ -1,4 +1,4 @@
-package com.socrata.internal.http
+package com.socrata.internal.http.util
 
 import org.scalatest.FunSuite
 import org.scalatest.matchers.MustMatchers

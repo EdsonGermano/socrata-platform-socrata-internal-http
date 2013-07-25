@@ -1,4 +1,4 @@
-package com.socrata.internal.http
+package com.socrata.internal.http.util
 
 import java.io.{InputStream, IOException}
 

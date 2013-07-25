@@ -1,4 +1,4 @@
-package com.socrata.internal.http.pingpong
+package com.socrata.internal.http.util
 
 import scala.annotation.tailrec
 
@@ -93,7 +93,7 @@ class IntrusivePriorityQueue[T <: IntrusivePriorityQueueNode] {
     nodes = newNodes
   }
 
-  private[pingpong] def reheap(idx: Int, priority: Long) {
+  private[util] def reheap(idx: Int, priority: Long) {
     val parentIdx = (idx - 1) >> 1
     if(parentIdx >= 0 && nodes(parentIdx).priority > priority) {
       swap(idx, parentIdx)
@@ -154,10 +154,10 @@ class IntrusivePriorityQueue[T <: IntrusivePriorityQueueNode] {
 }
 
 abstract class IntrusivePriorityQueueNode {
-  private[pingpong] var pq_queue: IntrusivePriorityQueue[_] = null
+  private[util] var pq_queue: IntrusivePriorityQueue[_] = null
   private[this] var pq_priority: Long = 0L
-  private[pingpong] var pq_idx: Int = -1
-  private[pingpong] def pq_priorityNoReheap(priority: Long) {
+  private[util] var pq_idx: Int = -1
+  private[util] def pq_priorityNoReheap(priority: Long) {
     pq_priority = priority
   }
 
