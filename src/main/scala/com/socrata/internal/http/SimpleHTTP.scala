@@ -15,8 +15,11 @@ import org.apache.http.entity.mime.content.InputStreamBody
 import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
 import org.apache.http.conn.ConnectTimeoutException
-import java.net.{SocketTimeoutException, URI, InetAddress, ConnectException}
-import com.socrata.internal.http.pingpong.{PingInfo, PingTarget, PingProvider}
+import java.net._
+import com.socrata.internal.http.pingpong._
+import java.util.concurrent.{TimeUnit, Phaser, CyclicBarrier}
+import scala.Some
+import scala.Some
 
 trait ResponseInfo {
   def resultCode: Int
@@ -29,8 +32,13 @@ trait ResponseInfoProvider {
 }
 
 class HttpClientException extends Exception
-class ConnectTimeout extends HttpClientException
-class ReceiveTimeout extends HttpClientException
+
+class HttpClientTimeoutException extends HttpClientException
+class ConnectTimeout extends HttpClientTimeoutException
+class ReceiveTimeout extends HttpClientTimeoutException
+class FullTimeout extends HttpClientTimeoutException
+
+class LivenessCheckFailed extends HttpClientException
 class ConnectFailed extends HttpClientException // failed for not-timeout reasons
 class NoBodyInResponse extends HttpClientException
 
@@ -52,6 +60,8 @@ trait HttpClient extends Closeable {
   protected def connectTimeout() = throw new ConnectTimeout
   protected def receiveTimeout() = throw new ReceiveTimeout
   protected def connectFailed() = throw new ConnectFailed
+  protected def livenessCheckFailed() = throw new LivenessCheckFailed
+  protected def fullTimeout() = throw new FullTimeout
   protected def noContentTypeInResponse() = throw new NoContentTypeInResponse
   protected def multipleContentTypesInResponse() = throw new MultipleContentTypesInResponse
   protected def unparsableContentType(contentType: String) = throw new UnparsableContentType(contentType)
@@ -152,6 +162,58 @@ class HttpClientHttpClient(pingProvider: PingProvider,
   }
   @volatile private[this] var initialized = false
   private val log = org.slf4j.LoggerFactory.getLogger(classOf[HttpClientHttpClient])
+  private val timeoutWorker = new TimeoutWorker
+
+  private class TimeoutWorker extends Thread {
+    sealed trait PendingJob
+    case class CancelJob(job: Job) extends PendingJob
+    case class Job(onTimeout: () => Any, deadline: Long) extends IntrusivePriorityQueueNode with PendingJob with Closeable {
+      priority = deadline
+      def close() {
+        pendingJobs.add(CancelJob(this))
+      }
+    }
+    object PoisonPill extends PendingJob
+
+    private val pendingJobs = new java.util.concurrent.LinkedBlockingQueue[PendingJob]
+    private val jobs = new IntrusivePriorityQueue[Job]
+
+    def shutdown() {
+      pendingJobs.add(PoisonPill)
+      join()
+    }
+
+    override def run() {
+      while(true) {
+        val now = System.currentTimeMillis()
+        while(jobs.nonEmpty && jobs.head.deadline <= now) jobs.pop().onTimeout()
+
+        val newJob = if(jobs.nonEmpty) {
+          pendingJobs.poll(Math.max(1L, jobs.head.deadline - now), TimeUnit.MILLISECONDS)
+        } else {
+          pendingJobs.take()
+        }
+
+        newJob match {
+          case j: Job =>
+            jobs.add(j)
+          case CancelJob(job) =>
+            jobs.remove(job)
+          case PoisonPill =>
+            if(jobs.nonEmpty) log.warn("Shutting down with " + jobs.size + " timeout jobs remaining")
+            return
+          case null => // timed out while waiting for the front job
+            jobs.pop().onTimeout()
+        }
+      }
+    }
+
+    def addJob(timeout: Int)(onTimeout: => Any): Closeable = {
+      val result = Job(() => onTimeout, System.currentTimeMillis() + timeout)
+      pendingJobs.add(result)
+      result
+    }
+  }
 
   private def init() {
     def reallyInit() = synchronized {
@@ -165,6 +227,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
           case None =>
             HttpProtocolParams.setUseExpectContinue(params, false)
         }
+        timeoutWorker.start()
         initialized = true
       }
     }
@@ -172,14 +235,37 @@ class HttpClientHttpClient(pingProvider: PingProvider,
   }
 
   def close() {
-    httpclient.getConnectionManager.shutdown()
+    try {
+      httpclient.getConnectionManager.shutdown()
+    } finally {
+      timeoutWorker.shutdown()
+    }
   }
 
-  private def send[A](req: HttpUriRequest, pingTarget: Option[PingTarget], maximumSizeBetweenAcks: Long, f: RawResponse => A): A = {
+  private def send[A](req: HttpUriRequest, timeout: Option[Int], pingTarget: Option[PingTarget], maximumSizeBetweenAcks: Long, f: RawResponse => A): A = {
+    val LivenessCheck = 0
+    val FullTimeout = 1
+    @volatile var abortReason: Int = -1 // this can be touched from another thread
+
+    def probablyAborted(e: Exception): Nothing = {
+      abortReason match {
+        case LivenessCheck => livenessCheckFailed()
+        case FullTimeout => fullTimeout()
+        case -1 => throw e // wasn't us
+        case other => sys.error("Unknown abort reason " + other)
+      }
+    }
+
     for {
       _ <- managed {
         pingTarget match {
-          case Some(target) => pingProvider.startPinging(target) { req.abort() }
+          case Some(target) => pingProvider.startPinging(target) { abortReason = LivenessCheck; req.abort() }
+          case None => NoopCloseable
+        }
+      }
+      _ <- managed {
+        timeout match {
+          case Some(ms) => timeoutWorker.addJob(ms) { abortReason = FullTimeout; req.abort() }
           case None => NoopCloseable
         }
       }
@@ -193,6 +279,10 @@ class HttpClientHttpClient(pingProvider: PingProvider,
           connectFailed()
         case e: UndeclaredThrowableException =>
           throw e.getCause
+        case e: SocketException if e.getMessage == "Socket closed" =>
+          probablyAborted(e)
+        case e: IOException if e.getMessage == "Request already aborted" =>
+          probablyAborted(e)
         case _: SocketTimeoutException =>
           receiveTimeout()
       }
@@ -201,8 +291,14 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       if(entity != null) {
         val content = entity.getContent()
         try {
+          val catchingInputStream = CatchingInputStream(content) {
+            case e: SocketException if e.getMessage == "Socket closed" =>
+              probablyAborted(e)
+            case e: java.net.SocketTimeoutException =>
+              receiveTimeout()
+          }
           val processed: InputStream with Acknowledgeable with ResponseInfoProvider =
-            new AcknowledgeableInputStream(new ReceiveTimeoutCatchingInputStream(content, receiveTimeout), maximumSizeBetweenAcks) with ResponseInfoProvider with ResponseInfo {
+            new AcknowledgeableInputStream(catchingInputStream, maximumSizeBetweenAcks) with ResponseInfoProvider with ResponseInfo {
               def responseInfo = this
               val resultCode = response.getStatusLine.getStatusCode
 
@@ -277,7 +373,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val op = bodylessOp(req)
-      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 
@@ -288,7 +384,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 
@@ -299,7 +395,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       sendEntity.addPart(req.field, new InputStreamBody(req.contents, req.contentType, req.file))
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
     }
   }
 
@@ -310,7 +406,16 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+    }
+  }
+}
+
+object TimeoutTest extends App {
+  using(new HttpClientHttpClient(NoopPingProvider)) { cli =>
+    val req = SimpleHttpRequestBuilder("localhost").port(6060).timeoutMS(Some(5000)).get
+    for(x <- cli.execute(req, None)) {
+      println(x.responseInfo.resultCode)
     }
   }
 }

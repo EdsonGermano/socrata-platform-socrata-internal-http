@@ -1,17 +1,13 @@
 package com.socrata.internal.http
 
 import java.io.InputStream
-import java.net.SocketTimeoutException
 
-class ReceiveTimeoutCatchingInputStream(underlying: InputStream, onReceiveTimeout: () => Nothing) extends InputStream {
+class CatchingInputStream private (underlying: InputStream, onException: PartialFunction[Throwable, Nothing]) extends InputStream {
   @inline
   private def maybeReceiveTimeout[T](f: => T): T =
     try {
       f
-    } catch {
-      case e: SocketTimeoutException =>
-        onReceiveTimeout()
-    }
+    } catch onException
 
   def read(): Int =
     maybeReceiveTimeout(underlying.read())
@@ -37,3 +33,9 @@ class ReceiveTimeoutCatchingInputStream(underlying: InputStream, onReceiveTimeou
   override def close() =
     maybeReceiveTimeout(underlying.close())
 }
+
+object CatchingInputStream {
+  def apply(underlying: InputStream)(onException: PartialFunction[Throwable, Nothing]) =
+    new CatchingInputStream(underlying, onException)
+}
+

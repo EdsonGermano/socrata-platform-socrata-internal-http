@@ -12,7 +12,8 @@ class SimpleHttpRequestBuilder private (val host: String,
                                         val headers: Iterable[(String, String)],
                                         val method: Option[String],
                                         val connectTimeoutMS: Option[Int],
-                                        val receiveTimeoutMS: Option[Int]) {
+                                        val receiveTimeoutMS: Option[Int],
+                                        val timeoutMS: Option[Int]) {
   def copy(host: String = this.host,
            secure: Boolean = this.secure,
            port: Int = this.port,
@@ -21,8 +22,9 @@ class SimpleHttpRequestBuilder private (val host: String,
            headers: Iterable[(String, String)] = this.headers,
            method: Option[String] = this.method,
            connectTimeoutMS: Option[Int] = this.connectTimeoutMS,
-           receiveTimeoutMS: Option[Int] = this.receiveTimeoutMS) =
-    new SimpleHttpRequestBuilder(host, secure, port, path, query, headers, method, connectTimeoutMS, receiveTimeoutMS)
+           receiveTimeoutMS: Option[Int] = this.receiveTimeoutMS,
+           timeoutMS: Option[Int] = this.timeoutMS) =
+    new SimpleHttpRequestBuilder(host, secure, port, path, query, headers, method, connectTimeoutMS, receiveTimeoutMS, timeoutMS)
 
   def port(newPort: Int) = copy(port = newPort)
 
@@ -50,6 +52,10 @@ class SimpleHttpRequestBuilder private (val host: String,
   /** Sets the receive timeout -- if the HTTP client blocks for this many milliseconds without receiving
     * anything, an exception is thrown.  Note that this is independent of any liveness ping check. */
   def receiveTimeoutMS(newReceiveTimeoutMS: Option[Int]) = copy(receiveTimeoutMS = newReceiveTimeoutMS)
+
+  /** Sets the whole-lifecycle timeout -- if the HTTP request lasts this many milliseconds, it will be
+    * aborted.  Note that this is independent of any liveness ping check. */
+  def timeoutMS(newTimeoutMS: Option[Int]) = copy(timeoutMS = newTimeoutMS)
 
   private def finish(methodIfNone: String) = method match {
     case Some(_) => this
@@ -81,7 +87,7 @@ class SimpleHttpRequestBuilder private (val host: String,
 
 object SimpleHttpRequestBuilder {
   def apply(host: String, secure: Boolean = false) =
-    new SimpleHttpRequestBuilder(host, secure, if(secure) 443 else 80, Nil, Vector.empty, Vector.empty, None, None, None)
+    new SimpleHttpRequestBuilder(host, secure, if(secure) 443 else 80, Nil, Vector.empty, Vector.empty, None, None, None, None)
 
   private[this] val hexDigit = "0123456789ABCDEF".toCharArray
   private[this] val encPB = locally {
