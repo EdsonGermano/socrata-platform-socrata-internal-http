@@ -51,20 +51,26 @@ class TimeoutManager(executor: Executor) extends Closeable {
       pendingJobs.drainTo(newJobs)
       if(newJobs.isEmpty) {
         if(jobs.isEmpty) {
+          log.trace("Zzzzzz")
           newJobs.add(pendingJobs.take())
         } else {
-          val job = pendingJobs.poll(jobs.head.deadline - now, TimeUnit.MILLISECONDS)
+          val delay = jobs.head.deadline - now
+          log.trace("Zzzzzz ({}ms)", delay)
+          val job = pendingJobs.poll(delay, TimeUnit.MILLISECONDS)
           if(job != null) newJobs.add(job)
         }
       }
 
       newJobs.asScala.foreach {
         case job: Job =>
+          log.trace("Adding timeout at {}", job.deadline)
           jobs.add(job)
         case CancelJob(job) =>
+          log.trace("Cancelling timeout at {}", job.deadline)
           jobs.remove(job)
         case PoisonPill =>
           if(jobs.nonEmpty) log.warn("Shutting down with " + jobs.size + " timeout jobs remaining")
+          else log.trace("Shutting down")
           return
       }
     }
@@ -77,6 +83,7 @@ class TimeoutManager(executor: Executor) extends Closeable {
   }
 
   private def runJob(job: Job) {
+    log.trace("Timeout expired")
     executor.execute(new Runnable {
       def run() { job.onTimeout() }
     })

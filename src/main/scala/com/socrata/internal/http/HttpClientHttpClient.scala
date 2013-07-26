@@ -1,24 +1,28 @@
 package com.socrata.internal.http
 
-import java.io._
-import java.nio.charset.StandardCharsets
-import org.apache.http.impl.client.DefaultHttpClient
-import org.apache.http.client.methods._
-import org.apache.http.entity._
-import com.rojoma.simplearm._
-import com.rojoma.simplearm.util._
 import java.lang.reflect.UndeclaredThrowableException
+import java.io._
+import java.net._
+import java.nio.charset.StandardCharsets
+import java.util.concurrent.Executor
+import javax.net.ssl.SSLException
+
+import org.apache.http.impl.client.DefaultHttpClient
 import org.apache.http.entity.mime.MultipartEntity
 import org.apache.http.entity.mime.content.InputStreamBody
 import org.apache.http.impl.conn.PoolingClientConnectionManager
 import org.apache.http.params.{CoreProtocolPNames, HttpProtocolParams, HttpConnectionParams}
 import org.apache.http.conn.ConnectTimeoutException
-import java.net._
-import com.socrata.internal.http.pingpong._
-import java.util.concurrent.Executor
-import com.socrata.internal.http.util._
-import javax.net.ssl.SSLException
+import org.apache.http.client.methods._
+import org.apache.http.entity._
+import com.rojoma.simplearm._
+import com.rojoma.simplearm.util._
 
+import com.socrata.internal.http.pingpong._
+import com.socrata.internal.http.util._
+import com.socrata.internal.http.exceptions._
+
+/** Implementation of [[com.socrata.internal.http.HttpClient]] based on Apache HttpComponents. */
 class HttpClientHttpClient(pingProvider: PingProvider,
                            executor: Executor,
                            continueTimeout: Option[Int] = Some(3000),
