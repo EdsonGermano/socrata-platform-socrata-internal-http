@@ -13,6 +13,7 @@ import com.socrata.internal.http.exceptions._
 import com.socrata.internal.http.pingpong.PingInfo
 import com.rojoma.json.ast.JValue
 import com.rojoma.json.codec.JsonCodec
+import com.rojoma.json.util.JsonArrayIterator
 
 trait HttpClient extends Closeable {
   import HttpClient._
@@ -20,6 +21,7 @@ trait HttpClient extends Closeable {
   type RawResponse = InputStream with Acknowledgeable with ResponseInfoProvider
   type RawJsonResponse = Reader with Acknowledgeable with ResponseInfoProvider
   type JsonResponse = Iterator[JsonEvent] with Acknowledgeable with ResponseInfoProvider
+  type ArrayResponse[T] = Iterator[T] with ResponseInfoProvider
 
   protected def connectTimeout() = throw new ConnectTimeout
   protected def receiveTimeout() = throw new ReceiveTimeout
@@ -98,6 +100,30 @@ trait HttpClient extends Closeable {
         }
       }
     }
+
+  def executeForArray[T : JsonCodec](req: SimpleHttpRequest, ping: Option[PingInfo], approximateMaximumSizePerElement: Long = Long.MaxValue): Managed[ArrayResponse[T]] = {
+    new SimpleArm[ArrayResponse[T]] {
+      def flatMap[A](f: ArrayResponse[T] => A): A =
+        for(events <- executeForJson(req, ping, approximateMaximumSizePerElement)) yield {
+          val it = new Iterator[T] with ResponseInfoProvider {
+            val rawIt = JsonArrayIterator[T](events)
+
+            def hasNext = {
+              events.acknowledge()
+              rawIt.hasNext
+            }
+
+            def next() = {
+              events.acknowledge()
+              rawIt.next()
+            }
+
+            val responseInfo = events.responseInfo
+          }
+          f(it)
+        }
+    }
+  }
 
   def executeForJValue(req: SimpleHttpRequest, ping: Option[PingInfo], approximateMaximumSize: Long = Long.MaxValue): (ResponseInfo, JValue) =
     for(response <- executeForJson(req, ping, maximumSizeBetweenAcks = approximateMaximumSize)) yield
