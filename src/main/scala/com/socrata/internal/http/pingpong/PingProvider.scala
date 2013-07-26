@@ -24,12 +24,12 @@ final class PingTarget private[pingpong] (private [pingpong] val host: InetAddre
 
   override def equals(o: Any) = o match {
     case that: PingTarget =>
-      java.util.Arrays.equals(this.address, that.address) && this.port == that.port && this.response == that.response
+      java.util.Arrays.equals(this.address, that.address) && this.port == that.port && java.util.Arrays.equals(this.response, that.response)
     case _ => false
   }
 
-  override def toString =
-    "PingTarget(" + host + ", " + port + ", " + response + ")"
+  override lazy val toString =
+    "PingTarget(" + host + ", " + port + ", " + response.map("%02X" format _).mkString + ")"
 }
 
 trait PingProvider {
@@ -302,7 +302,7 @@ private[pingpong] final class PingProviderImpl(intervalMS: Long, rangeMS: Int, m
     }
     if(from == null) return
     rxPacket.flip()
-    log.debug("Received a {}-byte datagram", rxPacket.limit)
+    log.debug("Received a {}-byte datagram from {}", rxPacket.limit, from)
     processRxPacket(from)
     processPackets()
   }
