@@ -64,7 +64,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     }
   }
 
-  private def send[A](req: HttpUriRequest, timeout: Option[Int], pingTarget: Option[PingTarget], maximumSizeBetweenAcks: Long, f: RawResponse => A): A = {
+  private def send[A](req: HttpUriRequest, timeout: Option[Int], pingTarget: Option[PingTarget], f: RawResponse => A): A = {
     val LivenessCheck = 0
     val FullTimeout = 1
     @volatile var abortReason: Int = -1 // this can be touched from another thread
@@ -98,7 +98,7 @@ class HttpClientHttpClient(pingProvider: PingProvider,
         case _: ConnectTimeoutException =>
           connectTimeout()
         case e: ConnectException =>
-          connectFailed()
+          connectFailed(e)
         case e: UndeclaredThrowableException =>
           throw e.getCause
         case e: SocketException if e.getMessage == "Socket closed" =>
@@ -111,6 +111,12 @@ class HttpClientHttpClient(pingProvider: PingProvider,
           probablyAborted(e)
         case _: SocketTimeoutException =>
           receiveTimeout()
+      }
+
+      if(log.isTraceEnabled) {
+        log.trace("<<< {}", response.getStatusLine)
+        log.trace("<<< {}", Option(response.getFirstHeader("Content-type")).getOrElse("[no content type]"))
+        log.trace("<<< {}", Option(response.getFirstHeader("Content-length")).getOrElse("[no content length]"))
       }
 
       val entity = response.getEntity
@@ -127,17 +133,14 @@ class HttpClientHttpClient(pingProvider: PingProvider,
             case e: java.net.SocketTimeoutException =>
               receiveTimeout()
           }
-          val processed: InputStream with Acknowledgeable with ResponseInfoProvider =
-            new AcknowledgeableInputStream(catchingInputStream, maximumSizeBetweenAcks) with ResponseInfoProvider with ResponseInfo {
-              def responseInfo = this
-              val resultCode = response.getStatusLine.getStatusCode
-
-              // I am *fairly* sure (from code-diving) that the value field of a header
-              // parsed from a response will never be null.
-              def headers(name: String) = response.getHeaders(name).map(_.getValue)
-              lazy val headerNames = response.getAllHeaders.iterator.map(_.getName.toLowerCase).toSet
-            }
-          f(processed)
+          val responseInfo = new ResponseInfo {
+            val resultCode = response.getStatusLine.getStatusCode
+            // I am *fairly* sure (from code-diving) that the value field of a header
+            // parsed from a response will never be null.
+            def headers(name: String) = response.getHeaders(name).map(_.getValue)
+            lazy val headerNames = response.getAllHeaders.iterator.map(_.getName.toLowerCase).toSet
+          }
+          f((responseInfo, catchingInputStream))
         } catch {
           case e: Exception =>
             req.abort()
@@ -151,13 +154,15 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     }
   }
 
-  def execute(req: SimpleHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] =
+  def executeRaw(req: SimpleHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = {
+    log.trace(">>> {}", req)
     req match {
-      case bodyless: BodylessHttpRequest => processBodyless(bodyless, ping, maximumSizeBetweenAcks)
-      case form: FormHttpRequest => processForm(form, ping, maximumSizeBetweenAcks)
-      case file: FileHttpRequest => processFile(file, ping, maximumSizeBetweenAcks)
-      case json: JsonHttpRequest => processJson(json, ping, maximumSizeBetweenAcks)
+      case bodyless: BodylessHttpRequest => processBodyless(bodyless, ping)
+      case form: FormHttpRequest => processForm(form, ping)
+      case file: FileHttpRequest => processFile(file, ping)
+      case json: JsonHttpRequest => processJson(json, ping)
     }
+  }
 
   def pingTarget(req: SimpleHttpRequest, ping: Option[PingInfo]): Option[PingTarget] = ping match {
     case Some(pi) => Some(new PingTarget(InetAddress.getByName(req.builder.host), pi.port, pi.response))
@@ -199,44 +204,44 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       throw new IllegalArgumentException("No method in request")
   }
 
-  def processBodyless(req: BodylessHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long) = new SimpleArm[RawResponse] {
+  def processBodyless(req: BodylessHttpRequest, ping: Option[PingInfo]) = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val op = bodylessOp(req)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
     }
   }
 
-  def processForm(req: FormHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processForm(req: FormHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new FormReader(req.contents), StandardCharsets.UTF_8), -1, formContentType)
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
     }
   }
 
-  def processFile(req: FileHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processFile(req: FileHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new MultipartEntity
       sendEntity.addPart(req.field, new InputStreamBody(req.contents, req.contentType, req.file))
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
     }
   }
 
-  def processJson(req: JsonHttpRequest, ping: Option[PingInfo], maximumSizeBetweenAcks: Long): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processJson(req: JsonHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(req.contents), StandardCharsets.UTF_8), -1, jsonContentType)
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), maximumSizeBetweenAcks, f)
+      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
     }
   }
 }

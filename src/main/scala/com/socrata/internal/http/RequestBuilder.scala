@@ -171,10 +171,12 @@ object RequestBuilder {
   }
 }
 
-sealed trait SimpleHttpRequest {
+sealed abstract class SimpleHttpRequest(bodyType: String) {
   val builder: RequestBuilder
+  override def toString =
+    builder.method.getOrElse("[no method]") + " " + builder.url + " with " + bodyType + " body"
 }
-class BodylessHttpRequest(val builder: RequestBuilder) extends SimpleHttpRequest
-class FormHttpRequest(val builder: RequestBuilder, val contents: Iterable[(String, String)]) extends SimpleHttpRequest
-class FileHttpRequest(val builder: RequestBuilder, val contents: InputStream, val file: String, val field: String, val contentType: String) extends SimpleHttpRequest
-class JsonHttpRequest(val builder: RequestBuilder, val contents: Iterator[JsonEvent]) extends SimpleHttpRequest
+class BodylessHttpRequest(val builder: RequestBuilder) extends SimpleHttpRequest("no")
+class FormHttpRequest(val builder: RequestBuilder, val contents: Iterable[(String, String)]) extends SimpleHttpRequest("form")
+class FileHttpRequest(val builder: RequestBuilder, val contents: InputStream, val file: String, val field: String, val contentType: String) extends SimpleHttpRequest("file")
+class JsonHttpRequest(val builder: RequestBuilder, val contents: Iterator[JsonEvent]) extends SimpleHttpRequest("JSON")
