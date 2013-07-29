@@ -158,17 +158,17 @@ class HttpClientHttpClient(pingProvider: PingProvider,
     }
   }
 
-  def executeRaw(req: SimpleHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = {
+  def executeRaw(req: SimpleHttpRequest): Managed[RawResponse] = {
     log.trace(">>> {}", req)
     req match {
-      case bodyless: BodylessHttpRequest => processBodyless(bodyless, ping)
-      case form: FormHttpRequest => processForm(form, ping)
-      case file: FileHttpRequest => processFile(file, ping)
-      case json: JsonHttpRequest => processJson(json, ping)
+      case bodyless: BodylessHttpRequest => processBodyless(bodyless)
+      case form: FormHttpRequest => processForm(form)
+      case file: FileHttpRequest => processFile(file)
+      case json: JsonHttpRequest => processJson(json)
     }
   }
 
-  def pingTarget(req: SimpleHttpRequest, ping: Option[PingInfo]): Option[PingTarget] = ping match {
+  def pingTarget(req: SimpleHttpRequest): Option[PingTarget] = req.builder.pingInfo match {
     case Some(pi) => Some(new PingTarget(InetAddress.getByName(req.builder.host), pi.port, pi.response))
     case None => None
   }
@@ -208,44 +208,44 @@ class HttpClientHttpClient(pingProvider: PingProvider,
       throw new IllegalArgumentException("No method in request")
   }
 
-  def processBodyless(req: BodylessHttpRequest, ping: Option[PingInfo]) = new SimpleArm[RawResponse] {
+  def processBodyless(req: BodylessHttpRequest) = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val op = bodylessOp(req)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
+      send(op, req.builder.timeoutMS, pingTarget(req), f)
     }
   }
 
-  def processForm(req: FormHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processForm(req: FormHttpRequest): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new FormReader(req.contents), StandardCharsets.UTF_8), -1, formContentType)
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
+      send(op, req.builder.timeoutMS, pingTarget(req), f)
     }
   }
 
-  def processFile(req: FileHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processFile(req: FileHttpRequest): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new MultipartEntity
       sendEntity.addPart(req.field, new InputStreamBody(req.contents, req.contentType, req.file))
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
+      send(op, req.builder.timeoutMS, pingTarget(req), f)
     }
   }
 
-  def processJson(req: JsonHttpRequest, ping: Option[PingInfo]): Managed[RawResponse] = new SimpleArm[RawResponse] {
+  def processJson(req: JsonHttpRequest): Managed[RawResponse] = new SimpleArm[RawResponse] {
     def flatMap[A](f: RawResponse => A): A = {
       init()
       val sendEntity = new InputStreamEntity(new ReaderInputStream(new JsonEventIteratorReader(req.contents), StandardCharsets.UTF_8), -1, jsonContentType)
       sendEntity.setChunked(true)
       val op = bodyEnclosingOp(req)
       op.setEntity(sendEntity)
-      send(op, req.builder.timeoutMS, pingTarget(req, ping), f)
+      send(op, req.builder.timeoutMS, pingTarget(req), f)
     }
   }
 }

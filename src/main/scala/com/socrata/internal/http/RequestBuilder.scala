@@ -3,6 +3,7 @@ package com.socrata.internal.http
 import java.io.InputStream
 
 import com.rojoma.json.io.JsonEvent
+import com.socrata.internal.http.pingpong.PingInfo
 
 class RequestBuilder private (val host: String,
                               val secure: Boolean,
@@ -13,7 +14,8 @@ class RequestBuilder private (val host: String,
                               val method: Option[String],
                               val connectTimeoutMS: Option[Int],
                               val receiveTimeoutMS: Option[Int],
-                              val timeoutMS: Option[Int]) {
+                              val timeoutMS: Option[Int],
+                              val pingInfo: Option[PingInfo]) {
   def copy(host: String = this.host,
            secure: Boolean = this.secure,
            port: Int = this.port,
@@ -23,8 +25,9 @@ class RequestBuilder private (val host: String,
            method: Option[String] = this.method,
            connectTimeoutMS: Option[Int] = this.connectTimeoutMS,
            receiveTimeoutMS: Option[Int] = this.receiveTimeoutMS,
-           timeoutMS: Option[Int] = this.timeoutMS) =
-    new RequestBuilder(host, secure, port, path, query, headers, method, connectTimeoutMS, receiveTimeoutMS, timeoutMS)
+           timeoutMS: Option[Int] = this.timeoutMS,
+           pingInfo: Option[PingInfo] = this.pingInfo) =
+    new RequestBuilder(host, secure, port, path, query, headers, method, connectTimeoutMS, receiveTimeoutMS, timeoutMS, pingInfo)
 
   def port(newPort: Int) = copy(port = newPort)
 
@@ -56,6 +59,8 @@ class RequestBuilder private (val host: String,
   /** Sets the whole-lifecycle timeout -- if the HTTP request lasts this many milliseconds, it will be
     * aborted.  Note that this is independent of any liveness ping check. */
   def timeoutMS(newTimeoutMS: Option[Int]) = copy(timeoutMS = newTimeoutMS)
+
+  def pingInfo(newPingInfo: Option[PingInfo]) = copy(pingInfo = newPingInfo)
 
   private def finish(methodIfNone: String) = method match {
     case Some(_) => this

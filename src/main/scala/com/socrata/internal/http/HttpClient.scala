@@ -17,16 +17,16 @@ trait HttpClient extends Closeable {
    * @note Usually, you'll want to use `execute` instead.
    * @return an `InputStream` and the HTTP header info.
    */
-  def executeRaw(req: SimpleHttpRequest, ping: Option[PingInfo] = None): Managed[RawResponse]
+  def executeRaw(req: SimpleHttpRequest): Managed[RawResponse]
 
   /**
    * Executes the request, returning an object which can be used to query the
    * response headers and decode the body.
    */
-  def execute(req: SimpleHttpRequest, ping: Option[PingInfo] = None): Managed[Response] =
+  def execute(req: SimpleHttpRequest): Managed[Response] =
     new SimpleArm[Response] {
       def flatMap[A](f: Response => A): A =
-        for(rawResponse <- executeRaw(req, ping)) yield {
+        for(rawResponse <- executeRaw(req)) yield {
           val cooked = new StandardResponse(rawResponse._1, rawResponse._2)
           f(cooked)
         }
