@@ -4,6 +4,7 @@ import java.io.InputStream
 
 import com.rojoma.json.io.JsonEvent
 import com.socrata.internal.http.pingpong.PingInfo
+import com.socrata.internal.http.util.HttpUtils
 
 class RequestBuilder private (val host: String,
                               val secure: Boolean,
@@ -35,17 +36,70 @@ class RequestBuilder private (val host: String,
 
   def p(newPath: String*) = copy(path = newPath)
 
+  /** Sets the query parameters for this request. */
   def query(newQuery: Iterable[(String, String)]) = copy(query = newQuery)
 
-  def q(newQuery: (String, String)*) = copy(query = newQuery)
+  /** Sets the query parameters for this request.  Equivalent to `query(Seq(...))`. */
+  def q(newQuery: (String, String)*) = query(newQuery)
 
   def addParameter(parameter: (String, String)) = copy(query = query.toVector :+ parameter)
 
+  /** Sets the headers for this request.
+    *
+    * @note Calling this will wipe out any cookies.
+    */
   def headers(newHeaders: Iterable[(String, String)]) = copy(headers = newHeaders)
 
-  def h(newHeaders: (String, String)*) = copy(headers = newHeaders)
+  /** Sets the headers for this request.  Equivalent to `headers(Seq(...))`. */
+  def h(newHeaders: (String, String)*) = headers(newHeaders)
 
   def addHeader(header: (String, String)) = copy(headers = headers.toVector :+ header)
+
+  def addHeaders(headers: Iterable[(String, String)]) = copy(headers = headers.toVector ++ headers)
+
+  /** Sets the cookies for this request.
+    *
+    * @note This will wipe out any pre-existing `Cookie` headers.
+    * @throws IllegalArgumentException if a cookie-name is not valid.
+    */
+  def cookies(newCookies: Iterable[(String, String)]) =
+    copy(headers = headers.view.filterNot(_._1.equalsIgnoreCase("cookie")).toVector ++ toCookieHeaders(newCookies))
+
+  /** Sets the cookies for this request.  Equivalent to `cookies(Seq(...))`. */
+  def c(newCookies: (String, String)*) = cookies(newCookies)
+
+  /** Adds a new `Cookie` header.
+    * @note This does not modify existing Cookie headers.
+    * @throws IllegalArgumentException if a cookie-name is not valid.
+    */
+  def addCookie(cookie: (String, String)) =
+    addHeader(toCookieHeaders(List(cookie)).head)
+
+  /** Adds new `Cookie` headers.
+    * @note This does not modify existing Cookie headers.
+    * @throws IllegalArgumentException if a cookie-name is not valid.
+    */
+  def addCookies(cookies: Iterable[(String, String)]) =
+    addHeaders(toCookieHeaders(cookies))
+
+  private def toCookieHeaders(cookies: Iterable[(String, String)]): Iterable[(String, String)] = {
+    val sb = new java.lang.StringBuilder
+    val result = Vector.newBuilder[(String, String)]
+    def flush() {
+      sb.setLength(sb.length - 1) // remove the trailing semicolon
+      result += "Cookie" -> sb.toString
+      sb.setLength(0)
+    }
+    cookies.foreach { case (name, value) =>
+      if(!HttpUtils.isToken(name)) throw new IllegalArgumentException("Not a valid cookie-name: " + name)
+      sb.append(name).append('=')
+      HttpUtils.quoteInto(sb, value)
+      sb.append(";")
+      if(sb.length > 128) flush()
+    }
+    if(sb.length != 0) flush()
+    result.result()
+  }
 
   def method(newMethod: String) = copy(method = Some(newMethod))
 
