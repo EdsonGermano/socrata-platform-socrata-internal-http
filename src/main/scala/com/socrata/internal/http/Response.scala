@@ -34,6 +34,22 @@ trait Response extends ResponseInfo {
    */
   def isJson: Boolean
 
+  /**
+   * Detects the character encoding of the response body.
+   *
+   * @return the `Charset` named by the "`charset`" parameter of the `Content-Type`, or ISO-8859-1
+   *         if there is none.
+   * @throws com.socrata.internal.http.exceptions.UnparsableContentType if the `Content-Type` header does not contain
+   *                                                                    a valid MIME type.
+   * @throws com.socrata.internal.http.exceptions.MultipleContentTypesInResponse if there is more than one `Content-Type`
+   *                                                                             header in the response.
+   * @throws com.socrata.internal.http.exceptions.IllegalCharsetName if the parameter exists but cannot
+   *                                                                 name any hypothetical charset.
+   * @throws com.socrata.internal.http.exceptions.UnsupportedCharset if the parameter names a charset
+   *                                                                 unknown to the JVM.
+   */
+  def charset: Charset
+
   /** `true` if the stream has been created. */
   def streamCreated: Boolean
 
@@ -46,7 +62,7 @@ trait Response extends ResponseInfo {
     */
   def asInputStream(maximumSizeBetweenAcks: Long = Long.MaxValue): InputStream with Acknowledgeable
 
-  /** Gets the response body as an `Reader`.  The returned reader will
+  /** Gets the response body as a `Reader`.  The returned reader will
     * throw a [[com.socrata.internal.http.util.TooMuchDataWithoutAcknowledgement]] exception
     * if it receives more than `maximumSizeBetweenAcks` bytes without having its `acknowledge()`
     * method called.
@@ -133,7 +149,7 @@ class StandardResponse(responseInfo: ResponseInfo, rawInputStream: InputStream) 
       multipleContentTypesInResponse()
   }
 
-  private[this] lazy val charset = contentType match {
+  lazy val charset = contentType match {
     case Some(ct) =>
       try {
         Option(ct.getParameter("charset")).map(Charset.forName).getOrElse(StandardCharsets.ISO_8859_1)
