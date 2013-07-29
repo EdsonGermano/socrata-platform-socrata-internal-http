@@ -103,6 +103,16 @@ class RequestBuilder private (val host: String,
 
   def method(newMethod: String) = copy(method = Some(newMethod))
 
+  /** Sets the "secure" flag on this builder, which controls whether this is an HTTP
+    * or HTTPS request.
+    *
+    * @param newSecure New value for the secure flag
+    * @param updatePort Whether to update the port to the default for the new secure setting (default true)
+    */
+  def secure(newSecure: Boolean, updatePort: Boolean = true) =
+    if(updatePort) copy(secure = newSecure, port = RequestBuilder.defaultPort(secure = newSecure))
+    else copy(secure = newSecure)
+
   /** Sets the connection timeout.  Note that this is independent of any liveness ping check. */
   def connectTimeoutMS(newConnectTimeoutMS: Option[Int]) = copy(connectTimeoutMS = newConnectTimeoutMS)
 
@@ -146,7 +156,10 @@ class RequestBuilder private (val host: String,
 
 object RequestBuilder {
   def apply(host: String, secure: Boolean = false) =
-    new RequestBuilder(host, secure, if(secure) 443 else 80, Nil, Vector.empty, Vector.empty, None, None, None, None)
+    new RequestBuilder(host, secure, defaultPort(secure), Nil, Vector.empty, Vector.empty, None, None, None, None, None)
+
+  private def defaultPort(secure: Boolean) =
+    if(secure) 443 else 80
 
   private[this] val hexDigit = "0123456789ABCDEF".toCharArray
   private[this] val encPB = locally {
