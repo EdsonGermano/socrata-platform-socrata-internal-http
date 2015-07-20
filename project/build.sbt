@@ -1,1 +1,3 @@
-addSbtPlugin("net.virtual-void" % "sbt-dependency-graph" % "0.7.4")
+resolvers += "Socrata Cloudbees" at "https://repository-socrata-oss.forge.cloudbees.com/release"
+
+addSbtPlugin("com.socrata" % "socrata-sbt-plugins" % "1.5.3")

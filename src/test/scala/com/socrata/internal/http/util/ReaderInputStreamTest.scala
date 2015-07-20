@@ -4,7 +4,7 @@ import scala.collection.JavaConverters._
 import org.scalatest.FunSuite
 import scala.util.Random
 import java.io._
-import org.scalatest.matchers.MustMatchers
+import org.scalatest.MustMatchers
 import org.scalatest.exceptions.ModifiableMessage
 import java.nio.charset.{StandardCharsets, Charset}
 import org.scalatest.concurrent.Timeouts

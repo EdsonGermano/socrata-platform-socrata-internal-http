@@ -4,10 +4,11 @@ import java.io.{InputStreamReader, Reader, InputStream}
 import javax.activation.{MimeTypeParseException, MimeType}
 import java.nio.charset.{UnsupportedCharsetException, IllegalCharsetNameException, StandardCharsets, Charset}
 
-import com.rojoma.json.io.{JsonReader, FusedBlockJsonEventIterator, JsonEvent}
-import com.rojoma.json.ast.JValue
-import com.rojoma.json.codec.JsonCodec
-import com.rojoma.json.util.JsonArrayIterator
+import com.rojoma.json.v3.codec.JsonDecode.DecodeResult
+import com.rojoma.json.v3.io.{JsonReader, FusedBlockJsonEventIterator, JsonEvent}
+import com.rojoma.json.v3.ast.JValue
+import com.rojoma.json.v3.codec.JsonDecode
+import com.rojoma.json.v3.util.JsonArrayIterator
 
 import com.socrata.internal.http.util.{AcknowledgeableInputStream, Acknowledgeable}
 import com.socrata.internal.http.exceptions._
@@ -99,7 +100,7 @@ trait Response extends ResponseInfo {
     *                                                                          bytes from the response.
     * @throws com.socrata.internal.http.exceptions.ContentTypeException if the response does not have an interpretable `Content-type`
     *                                                                   or if it is not application/json.
-    * @throws com.rojoma.json.io.JsonReaderException if the response is ill-formed.
+    * @throws com.rojoma.json.v3.io.JsonReaderException if the response is ill-formed.
     */
   def asJValue(approximateMaximumSize: Long = Long.MaxValue): JValue
 
@@ -111,9 +112,9 @@ trait Response extends ResponseInfo {
     *                                                                          bytes from the response.
     * @throws com.socrata.internal.http.exceptions.ContentTypeException if the response does not have an interpretable `Content-type` or if
     *                                                                   it is not application/json.
-    * @throws com.rojoma.json.io.JsonReaderException if the response is ill-formed.
+    * @throws com.rojoma.json.v3.io.JsonReaderException if the response is ill-formed.
     */
-  def asValue[T : JsonCodec](approximateMaximumSize: Long = Long.MaxValue): Option[T]
+  def asValue[T : JsonDecode](approximateMaximumSize: Long = Long.MaxValue): Option[T]
 
   /** Gets the response body as an instance of a class which is convertable from JSON.
     *
@@ -126,9 +127,9 @@ trait Response extends ResponseInfo {
     *                                                                          bytes from the response.
     * @throws com.socrata.internal.http.exceptions.ContentTypeException if the response does not have an interpretable `Content-type` or if
     *                                                                   it is not application/json.
-    * @throws com.rojoma.json.io.JsonReaderException if the response is ill-formed or it is not an array.
+    * @throws com.rojoma.json.v3.io.JsonReaderException if the response is ill-formed or it is not an array.
     */
-  def asArray[T : JsonCodec](approximateMaximumElementSize: Long = Long.MaxValue): Iterator[T]
+  def asArray[T : JsonDecode](approximateMaximumElementSize: Long = Long.MaxValue): Iterator[T]
 }
 
 class StandardResponse(responseInfo: ResponseInfo, rawInputStream: InputStream) extends Response {
@@ -193,10 +194,13 @@ class StandardResponse(responseInfo: ResponseInfo, rawInputStream: InputStream) 
   def asJValue(approximateMaximumSize: Long): JValue =
     JsonReader.fromEvents(asJsonEvents(approximateMaximumSize))
 
-  def asValue[T: JsonCodec](approximateMaximumSize: Long): Option[T] =
-    JsonCodec[T].decode(asJValue(approximateMaximumSize))
+  def asValue[T: JsonDecode](approximateMaximumSize: Long): Option[T] =
+    JsonDecode[T].decode(asJValue(approximateMaximumSize)) match {
+      case Left(_) => None
+      case Right(jv) => Some(jv)
+    }
 
-  def asArray[T: JsonCodec](approximateMaximumElementSize: Long): Iterator[T] =
+  def asArray[T: JsonDecode](approximateMaximumElementSize: Long): Iterator[T] =
     new Iterator[T] {
       val events = asJsonEvents(approximateMaximumElementSize)
       val rawIt = JsonArrayIterator[T](events)

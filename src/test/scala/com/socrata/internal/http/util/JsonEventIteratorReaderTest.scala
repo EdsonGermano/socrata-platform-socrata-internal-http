@@ -1,16 +1,16 @@
 package com.socrata.internal.http.util
 
 import org.scalatest.FunSuite
-import org.scalatest.matchers.MustMatchers
+import org.scalatest.MustMatchers
 import org.scalatest.prop.PropertyChecks
 import java.io.Reader
-import com.rojoma.json.ast.JValue
-import com.rojoma.json.testsupport.ArbitraryJValue
-import com.rojoma.json.io.{CompactJsonWriter, JValueEventIterator}
+import com.rojoma.json.v3.ast.JValue
+import com.rojoma.json.v3.testsupport.ArbitraryJValue
+import com.rojoma.json.v3.io.{CompactJsonWriter, JValueEventIterator}
 import org.scalacheck.Arbitrary
 
 class JsonEventIteratorReaderTest extends FunSuite with MustMatchers with PropertyChecks {
-  def readAll(r: Reader, blockSize: Int) = {
+  def readAll(r: Reader, blockSize: Int): String = {
     val buf = new Array[Char](blockSize)
     val sb = new StringBuilder
     def loop() {
@@ -20,7 +20,7 @@ class JsonEventIteratorReaderTest extends FunSuite with MustMatchers with Proper
       }
     }
     loop()
-    sb.toString
+    sb.toString()
   }
 
   test("A JsonEventReader produces the same characters as a CompactJsonWriter") {

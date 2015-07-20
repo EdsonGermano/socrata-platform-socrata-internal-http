@@ -2,7 +2,7 @@ package com.socrata.internal.http
 
 import java.io.InputStream
 
-import com.rojoma.json.io.JsonEvent
+import com.rojoma.json.v3.io.JsonEvent
 import com.socrata.internal.http.pingpong.PingInfo
 import com.socrata.internal.http.util.HttpUtils
 
